@@ -1,19 +1,277 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="th">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AKAPSpred v5.1</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; max-width: 760px; margin: 48px auto; padding: 0 20px; line-height: 1.6; }
-    code { background: #f3f4f6; padding: 2px 5px; border-radius: 4px; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>คู่มือการใช้งาน AKAP Domain Screener</title>
+<style>
+  :root{
+    --blue:#2f6df6;
+    --blue2:#68aefc;
+    --soft:#f5f9ff;
+    --teal:#16a6c9;
+    --orange:#ff7d66;
+    --text:#1e2a39;
+    --muted:#5f6f85;
+    --line:#dce7f5;
+    --green:#16a34a;
+    --amber:#d97706;
+    --red:#dc2626;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans Thai","Tahoma","Segoe UI",sans-serif;color:var(--text);background:#f3f7fc;line-height:1.7}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 60px}
+  .hero{background:linear-gradient(135deg,#eef5ff,#ffffff);border:1px solid var(--line);border-radius:22px;padding:28px 28px 22px;box-shadow:0 10px 30px rgba(37,99,235,.08)}
+  h1,h2,h3{line-height:1.25;margin:0 0 12px}
+  h1{font-size:34px;color:#1141a3}
+  h2{font-size:26px;margin-top:36px;color:#1348b5}
+  h3{font-size:20px;color:#1f4eb6}
+  p{margin:8px 0 12px}
+  .subtitle{font-size:18px;color:var(--muted)}
+  .badges{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+  .badge{background:#fff;border:1px solid var(--line);padding:8px 12px;border-radius:999px;font-size:14px;color:#32518a}
+  .note{background:#fff8e8;border-left:5px solid #f59e0b;padding:14px 16px;border-radius:10px;margin:14px 0}
+  .card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:0 8px 24px rgba(30,41,59,.05);margin-top:18px}
+  .grid{display:grid;gap:16px}
+  .grid-2{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .grid-3{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+  .step{background:var(--soft);border:1px solid var(--line);border-radius:18px;padding:18px;position:relative}
+  .step-num{width:38px;height:38px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;margin-bottom:10px}
+  .ui{background:#fbfdff;border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:12px}
+  .row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .pill{padding:8px 12px;border-radius:999px;background:#eaf2ff;color:#2350b3;font-size:14px;border:1px solid #cfe0ff}
+  .input{background:white;border:1px solid #cddaf0;border-radius:12px;padding:12px 14px;color:#607089;min-height:48px}
+  .textarea{min-height:110px;white-space:pre-line}
+  .btn{display:inline-block;background:var(--blue);color:#fff;padding:11px 16px;border-radius:12px;font-weight:700;box-shadow:0 8px 20px rgba(47,109,246,.2)}
+  .btn.secondary{background:#14a3c7}
+  .mini-title{font-size:14px;font-weight:700;color:#47608a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+  table{width:100%;border-collapse:collapse;background:#fff;border-radius:16px;overflow:hidden}
+  th,td{padding:12px 14px;border-bottom:1px solid #e7eef8;text-align:left;vertical-align:top}
+  th{background:#eef5ff;color:#20408f;font-size:15px}
+  tr:last-child td{border-bottom:none}
+  .status{display:inline-block;padding:5px 10px;border-radius:999px;font-weight:700;font-size:13px}
+  .akap{background:#e8f8ee;color:#13763a}
+  .ddip{background:#edf5ff;color:#2352b6}
+  .amb{background:#fff5e6;color:#a45f00}
+  .unlikely{background:#ffecec;color:#b42318}
+  .metric{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;text-align:center}
+  .metric .v{font-size:28px;font-weight:800;color:#1f4eb6;display:block}
+  .footer{margin-top:36px;color:#6b7a8f;font-size:14px;text-align:center}
+  .legend li{margin:6px 0}
+  code{background:#eef4ff;padding:2px 6px;border-radius:6px;color:#1141a3}
+
+  .cta-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:22px;align-items:center}
+  .cta-main{
+    display:inline-flex;align-items:center;gap:10px;
+    background:linear-gradient(135deg,var(--blue),var(--blue2));
+    color:#fff;text-decoration:none;font-weight:800;
+    padding:14px 20px;border-radius:14px;
+    box-shadow:0 10px 24px rgba(47,109,246,.25);
+    transition:.15s transform ease,.15s box-shadow ease;
+  }
+  .cta-main:hover{transform:translateY(-1px);box-shadow:0 14px 30px rgba(47,109,246,.30)}
+  .cta-sub{color:var(--muted);font-size:15px}
+  .quick-start-box{background:#eef7ff;border:1px solid #cde6ff;border-radius:16px;padding:16px;margin-top:16px}
+</style>
 </head>
 <body>
-  <h1>AKAPSpred v5.1</h1>
-  <p>Proteome-scale screening for AKAP-like PKA anchoring helices.</p>
-  <p>This GitHub Pages file is a simple landing page. Run the interactive app with:</p>
-  <pre><code>streamlit run akap_app.py</code></pre>
-  <p>Version note: v5.1 uses ML v2 plus updated confidence logic and validation documentation.</p>
+<div class="wrap">
+  <section class="hero">
+    <h1>คู่มือการใช้งาน AKAP Domain Screener</h1>
+    <p class="subtitle">สำหรับเว็บไซต์ <strong>https://akapspred.streamlit.app/</strong> — อธิบายวิธีใช้โปรแกรมและวิธีแปลผลเป็นภาษาไทยแบบเข้าใจง่าย</p>
+    <div class="badges">
+      <span class="badge">เหมาะสำหรับผู้เริ่มต้น</span>
+      <span class="badge">อธิบายทีละขั้นตอน</span>
+      <span class="badge">มีแนวทางแปลผล</span>
+      <span class="badge">ใช้กับชื่อโปรตีนหรือ UniProt ID ได้</span>
+    </div>
+    <div class="cta-row">
+      <a class="cta-main" href="https://akapspred.streamlit.app/" target="_blank" rel="noopener noreferrer">🚀 Start to use AKAP Screener</a>
+      <span class="cta-sub">กดปุ่มนี้เพื่อเปิดโปรแกรมจริงในแท็บใหม่</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>โปรแกรมนี้ใช้ทำอะไร?</h2>
+    <div class="card">
+      <p>โปรแกรมนี้ใช้สำหรับ <strong>คัดกรองลำดับโปรตีน</strong> เพื่อค้นหาว่ามีบริเวณที่มีแนวโน้มเป็น <strong>AKAP motif / AKAP domain</strong> หรือไม่ โดยจะประเมินว่าบริเวณนั้นคล้าย motif ที่จับกับ <strong>PKA regulatory subunit</strong> มากน้อยเพียงใด</p>
+      <ul>
+        <li>ใช้ค้นหา candidate AKAP จากชื่อโปรตีน หรือ UniProt accession</li>
+        <li>ช่วยแยกผลลัพธ์เป็น <strong>AKAP / DDIP / ambiguous / unlikely</strong></li>
+        <li>ช่วยบอกแนวโน้มความจำเพาะต่อ <strong>RI</strong> หรือ <strong>RII</strong></li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>เริ่มใช้งานอย่างรวดเร็ว</h2>
+    <div class="card">
+      <p>ถ้าต้องการเริ่มใช้งานทันที ให้กดปุ่มด้านล่างเพื่อเปิดหน้าโปรแกรม AKAP Domain Screener</p>
+      <div class="quick-start-box">
+        <a class="cta-main" href="https://akapspred.streamlit.app/" target="_blank" rel="noopener noreferrer">🚀 Start to use</a>
+        <p style="margin-top:12px;margin-bottom:0">หลังจากเปิดเว็บแล้ว ให้เลือก <strong>Search by protein name / UniProt ID</strong> ใส่ชื่อโปรตีน เช่น <code>SPHKAP</code> แล้วกด <strong>Search UniProt</strong> จากนั้นกด <strong>Run AKAP Screen</strong></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>รูปที่ 1: ขั้นตอนการใส่ชื่อโปรตีน ค้นหา UniProt และกดรัน AKAP Screen</h2>
+    <div class="card">
+      <div class="grid grid-3">
+        <div class="step">
+          <div class="step-num">1</div>
+          <h3>เปิดหน้าเว็บ</h3>
+          <p>เข้าเว็บไซต์ AKAP Domain Screener แล้วเลื่อนมาที่ส่วน <strong>Input</strong></p>
+          <div class="ui">
+            <div class="mini-title">Choose input method</div>
+            <div class="row">
+              <span class="pill">Paste sequence(s)</span>
+              <span class="pill">Upload FASTA file</span>
+              <span class="pill">Upload CSV file</span>
+              <span class="pill" style="background:#dff3ff;border-color:#bfe6ff;color:#0c6792"><strong>Search by protein name / UniProt ID</strong></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">2</div>
+          <h3>เลือกวิธีค้นหา</h3>
+          <p>ถ้าต้องการค้นจากชื่อโปรตีน ให้เลือก <strong>Search by protein name / UniProt ID</strong></p>
+          <div class="ui">
+            <div class="mini-title">คำอธิบาย</div>
+            <p>ใส่ได้ทั้ง <strong>ชื่อโปรตีน</strong>, <strong>ชื่อยีน</strong> หรือ <strong>UniProt accession</strong></p>
+            <p>ตัวอย่าง: <code>SPHKAP</code>, <code>AKAP10</code>, <code>Ezrin</code>, <code>O43572</code></p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">3</div>
+          <h3>พิมพ์ชื่อโปรตีน</h3>
+          <p>ใส่ชื่อโปรตีนทีละ 1 บรรทัด ถ้าต้องการค้นหลายตัวก็ใส่หลายบรรทัดได้</p>
+          <div class="ui">
+            <div class="mini-title">Enter protein/gene names or UniProt IDs</div>
+            <div class="input textarea">SPHKAP
+AKAP10
+Ezrin
+O43572</div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">4</div>
+          <h3>ตั้งค่า Organism</h3>
+          <p>เลือกสิ่งมีชีวิตที่ต้องการ เช่น <strong>Human</strong> และควรเปิด <strong>Reviewed (Swiss-Prot) only</strong> เพื่อให้ได้ข้อมูลที่เชื่อถือได้มากขึ้น</p>
+          <div class="ui row">
+            <div class="input" style="min-width:160px"><strong>Organism:</strong> Human</div>
+            <div class="input" style="min-width:220px"><strong>Reviewed:</strong> ✓ Swiss-Prot only</div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">5</div>
+          <h3>กด Search UniProt</h3>
+          <p>โปรแกรมจะค้นหาโปรตีนจาก UniProt และดึง sequence มาให้โดยอัตโนมัติ</p>
+          <div class="ui">
+            <span class="btn secondary">🔍 Search UniProt</span>
+            <p style="margin-top:12px">หลังจากกดแล้ว ให้ตรวจสอบว่า accession, protein name และ organism ถูกต้อง</p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">6</div>
+          <h3>กด Run AKAP Screen</h3>
+          <p>เมื่อโปรแกรมโหลดโปรตีนเรียบร้อยแล้ว ให้กดปุ่มนี้เพื่อเริ่มการวิเคราะห์</p>
+          <div class="ui">
+            <span class="btn">🔍 Run AKAP Screen</span>
+            <p style="margin-top:12px">จากนั้นผลลัพธ์จะปรากฏในส่วน <strong>Results</strong></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>เมื่อรันเสร็จ จะเห็นอะไรบ้าง?</h2>
+    <div class="grid grid-2">
+      <div class="metric"><span class="v">Proteins screened</span>จำนวนโปรตีนที่นำมาวิเคราะห์</div>
+      <div class="metric"><span class="v">Proteins with AKAP</span>จำนวนโปรตีนที่พบ hit อย่างน้อย 1 ตำแหน่ง</div>
+      <div class="metric"><span class="v">Total motif hits</span>จำนวน hit ทั้งหมดที่ตรวจพบ</div>
+      <div class="metric"><span class="v">Time</span>เวลาที่ใช้ในการประมวลผล</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>การแปลผลตารางผลลัพธ์</h2>
+    <div class="card">
+      <table>
+        <thead>
+          <tr><th>คอลัมน์</th><th>ความหมาย</th><th>อ่านอย่างไร</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>protein</code></td><td>ชื่อโปรตีน</td><td>บอกว่า hit นี้มาจากโปรตีนตัวไหน</td></tr>
+          <tr><td><code>isoform</code></td><td>ชนิดของ PKA regulatory subunit</td><td><strong>RI</strong> หรือ <strong>RII</strong></td></tr>
+          <tr><td><code>start</code>, <code>end</code></td><td>ตำแหน่งของ motif ในลำดับโปรตีน</td><td>ใช้ระบุตำแหน่งบริเวณที่น่าสนใจ</td></tr>
+          <tr><td><code>pssm_score</code></td><td>คะแนนความคล้าย AKAP motif</td><td>โดยทั่วไป <strong>ยิ่งสูงยิ่งน่าสนใจ</strong></td></tr>
+          <tr><td><code>ml_prob</code></td><td>ความน่าจะเป็นจากโมเดล ML</td><td>ค่าใกล้ 1 = สนับสนุนว่าเป็น hit ที่ดี</td></tr>
+          <tr><td><code>classification</code></td><td>การจัดกลุ่มผลลัพธ์</td><td>ดูตารางด้านล่าง</td></tr>
+          <tr><td><code>n_negdet</code></td><td>จำนวน negative determinants</td><td>ถ้าสูง มักลดความน่าเชื่อถือว่าเป็น AKAP จริง</td></tr>
+          <tr><td><code>helix_turns</code> / <code>contiguous_hydro_turns</code></td><td>จำนวนรอบ helix ที่ประเมินได้</td><td>ช่วยแยก AKAP ออกจาก DDIP</td></tr>
+          <tr><td><code>predicted_specificity</code></td><td>แนวโน้มความจำเพาะต่อ RI หรือ RII</td><td>เช่น RI-specific, RII-specific, dual</td></tr>
+          <tr><td><code>dual</code></td><td>มี hit ของ RI และ RII ซ้อนกันหรือไม่</td><td>True = อาจมี dual specificity</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>รูปที่ 2: ความหมายของ classification</h2>
+    <div class="card grid grid-2">
+      <div class="step"><span class="status akap">AKAP</span><p><strong>น่าเชื่อถือสูง</strong><br>เป็น candidate ที่มีลักษณะสอดคล้องกับ AKAP motif มากที่สุด ควรเป็นตัวเลือกแรก ๆ สำหรับการศึกษาต่อ</p></div>
+      <div class="step"><span class="status ddip">DDIP</span><p><strong>อาจจับ d/d domain แต่ไม่ใช่ PKA anchor จริง</strong><br>ควรระวังว่าอาจเป็น DDIP มากกว่า AKAP</p></div>
+      <div class="step"><span class="status amb">ambiguous</span><p><strong>ก้ำกึ่ง</strong><br>ยังไม่ชัดเจน ต้องใช้ข้อมูลเพิ่มเติม เช่น โครงสร้าง, conservation, experiment</p></div>
+      <div class="step"><span class="status unlikely">unlikely</span><p><strong>ความเป็นไปได้น้อย</strong><br>มักมี negative determinant หรือคุณสมบัติไม่สอดคล้องกับ AKAP motif</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>รูปที่ 3: วิธีเลือก hit ที่ควรสนใจ</h2>
+    <div class="card">
+      <ol class="legend">
+        <li>เริ่มจากดู <strong>classification</strong> ก่อน — ถ้าเป็น <span class="status akap">AKAP</span> จะน่าสนใจที่สุด</li>
+        <li>ดู <strong>pssm_score</strong> — เลือก hit ที่มีคะแนนสูงกว่า hit อื่นในโปรตีนเดียวกัน</li>
+        <li>ดู <strong>ml_prob</strong> — ถ้าค่าสูงจะช่วยสนับสนุนว่า hit นั้นดี</li>
+        <li>ดู <strong>n_negdet</strong> — ถ้าเป็น 0 จะดีกว่า เพราะไม่มี negative determinant</li>
+        <li>ดู <strong>predicted_specificity</strong> — ถ้าคุณสนใจ RI หรือ RII เป็นพิเศษ ให้ใช้ค่านี้ช่วยตัดสิน</li>
+        <li>ดู <strong>Detailed View</strong> และ <strong>Protein map</strong> เพื่อเข้าใจตำแหน่งของ motif ในโปรตีน</li>
+      </ol>
+      <div class="note">
+        ตัวอย่างการอ่านผล: ถ้า hit มี <strong>classification = AKAP</strong>, <strong>pssm_score สูง</strong>, <strong>ml_prob สูง</strong>, และ <strong>n_negdet = 0</strong> → ถือว่าเป็น candidate ที่ดีมากสำหรับการศึกษาต่อ
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>ข้อควรระวังในการแปลผล</h2>
+    <div class="card">
+      <ul>
+        <li>ผลจากโปรแกรมเป็น <strong>prediction / screening</strong> ไม่ใช่การยืนยันเชิงทดลอง</li>
+        <li>hit ที่ดีควรนำไปตรวจต่อด้วยข้อมูลอื่น เช่น conservation, structure prediction, mutational analysis หรือ biochemical assay</li>
+        <li>ถ้าโปรตีนหนึ่งมีหลาย hit ให้พิจารณาทั้งคะแนน, classification และตำแหน่งในโปรตีนร่วมกัน</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="card" style="text-align:center">
+      <h2 style="margin-top:0">พร้อมเริ่มใช้งานแล้ว?</h2>
+      <p>กดปุ่มนี้เพื่อเปิดโปรแกรมจริง</p>
+      <a class="cta-main" href="https://akapspred.streamlit.app/" target="_blank" rel="noopener noreferrer">🚀 Start to use AKAP Screener</a>
+    </div>
+  </section>
+
+  <div class="footer">
+    คู่มือนี้จัดทำเพื่ออธิบายการใช้งาน AKAP Domain Screener เป็นภาษาไทยแบบอ่านง่ายสำหรับผู้เริ่มต้น
+  </div>
+</div>
 </body>
 </html>
