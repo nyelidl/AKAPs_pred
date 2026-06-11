@@ -53,11 +53,7 @@ Use the screener as a prioritization tool. A predicted motif is a candidate for 
 ## Quick start
 
 ### Web app (Streamlit)
-
-```bash
-pip install -r requirements.txt
-streamlit run akap_app.py
-```
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://akapspred.streamlit.app/)
 
 The app accepts:
 - **Paste** a sequence or FASTA
