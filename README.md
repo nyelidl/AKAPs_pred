@@ -1,4 +1,4 @@
-# 🧬 AKAP Domain Screener
+# 🧬 AKAP Domain filter
 
 Screen proteins for **A-Kinase Anchoring Protein (AKAP)** amphipathic-helix motifs that bind PKA regulatory subunits.
 
