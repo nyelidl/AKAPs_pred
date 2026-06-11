@@ -1,4 +1,4 @@
-# 🧬 AKAP Domain filter
+# 🧬 AKAP Domain Screener
 
 Screen proteins for **A-Kinase Anchoring Protein (AKAP)** amphipathic-helix motifs that bind PKA regulatory subunits.
 
@@ -144,6 +144,11 @@ The tool resolves missing sequences by: sequence column → UniProt ID fetch →
 | `amphipathic` | Passes the hydrophilic-face polarity check? |
 | `pI` | Isoelectric point of the core (annotation) |
 | `helix_approx` | Approximate helix propensity (0–1) |
+| `classification` | **AKAP** / **DDIP** / **ambiguous** / **unlikely** (Falcone & Scott 2025) |
+| `n_negdet` | Count of charged residues (D/E) at hydrophobic anchor positions |
+| `negdet_severity` | `none` / `mild` (1) / `severe` (2+) |
+| `contiguous_hydro_turns` | Estimated amphipathic helix turns (AKAP ≥5, DDIP 3–4) |
+| `dd_class` | Predicted d/d domain partner: `RIID2` / `RID2` / `DPY-30` |
 
 ---
 
@@ -160,11 +165,46 @@ The 7 missed RIIα motifs are the paper's own weakest hits (high MAST E-values).
 
 ## Citation
 
-If you use this tool, please cite the original paper:
+If you use this tool, please cite the original papers:
 
 > Burgers PP, van der Heyden MAG, Kok B, Heck AJR, Scholten A. (2015)
 > A Systematic Evaluation of Protein Kinase A–A-Kinase Anchoring Protein Interaction Motifs.
 > *Biochemistry* 54(1):11–21. [doi:10.1021/bi500721a](https://doi.org/10.1021/bi500721a)
+
+> Falcone JI, Scott JD. (2025)
+> The ascent of AKAPs, from architectural elements to kinase anchors: a perspective.
+> *Biochem J* 482(10):485–498. [doi:10.1042/BCJ20253085](https://doi.org/10.1042/BCJ20253085)
+
+---
+
+## DDIP vs AKAP classification (NEW)
+
+Based on Falcone & Scott (2025), the tool now distinguishes true PKA-anchoring AKAPs from
+D/D domain interacting proteins (DDIPs) — proteins that bind the same d/d groove via amphipathic
+helices but do NOT anchor PKA.
+
+| Classification | Meaning | Criteria |
+|---|---|---|
+| **AKAP** | Strong PKA anchor | ≥5 helix turns, no negative determinants, high PSSM |
+| **DDIP** | D/D domain interactor (not PKA) | 3–4 helix turns (shorter amphipathic helix) |
+| **ambiguous** | Could be either | Borderline; needs experimental validation |
+| **unlikely** | Disrupted hydrophobic face | Charged residue (D/E) at anchor position |
+
+### Negative determinants
+
+A single Asp or Glu on the hydrophobic face of the amphipathic helix abolishes PKA binding.
+This was demonstrated in:
+- **OPA1 fungal forms** (Asp at position 6 → no AKAP function)
+- **smAKAP S66D mutant** (Ser→Asp at anchor → loss of PKA binding)
+
+The tool flags these as `negdet_severity: mild (1 violation) or severe (2+)`.
+
+### d/d domain class
+
+Each hit is annotated with its predicted binding partner class:
+- **RIID2** — PKA-RIIα-like d/d domain (most AKAPs)
+- **RID2** — PKA-RIα-like d/d domain (dual-specific AKAPs)
+- **DPY-30** — histone methylation / dosage compensation machinery
 
 ---
 

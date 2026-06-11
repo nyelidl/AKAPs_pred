@@ -338,8 +338,10 @@ def main():
             isos = "+".join(sorted(set(r["isoform"] for r in hits_for)))
             dual = any(r["dual"] for r in hits_for)
             best = max(r["pssm_score"] for r in hits_for)
+            classes = set(r.get("classification", "") for r in hits_for)
+            cls_tag = "/".join(sorted(classes)) if classes else ""
             tag = " (dual-specific)" if dual else ""
-            print(f"    {pid:30s}  {isos:6s}  best_score={best:6.2f}{tag}")
+            print(f"    {pid:30s}  {isos:6s}  best_score={best:6.2f}  [{cls_tag}]{tag}")
 
     if no_hit:
         print(f"\n  Proteins WITHOUT AKAP motif:")

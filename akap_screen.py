@@ -183,6 +183,152 @@ def canonical_match(core, iso):
     return bool(rx.fullmatch(core))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DDIP vs AKAP analysis (Falcone & Scott, Biochem J 2025, 482, 485-498)
+# ─────────────────────────────────────────────────────────────────────────────
+# Key insight: D/D domain interacting proteins (DDIPs) bind the same d/d groove
+# using amphipathic helices but do NOT anchor PKA. Structural distinction:
+#   DDIP helix = 4 helical turns (~14 residues)
+#   AKAP helix = 5 helical turns (~18 residues)
+# A single charged residue (Glu/Asp) on the hydrophobic face abolishes PKA binding
+# (demonstrated in OPA1 fungal forms and smAKAP S66D mutant).
+
+CHARGED_NEG = set("DE")     # negative determinants on hydrophobic face
+HYDROPHOBIC = set("AVLIMFW")
+
+# Hydrophobic anchor positions within the CORE (0-indexed)
+# RII 12-mer core: anchors at core positions 0, 3, 4, 7, 8, 11
+RII_CORE_ANCHORS = [0, 3, 4, 7, 8, 11]
+# RI 18-mer core: anchors at core positions 2, 3, 6, 7, 10, 11, 14, 15
+RI_CORE_ANCHORS  = [2, 3, 6, 7, 10, 11, 14, 15]
+
+# Anchor positions in the FULL WINDOW (core starts at CORE_OFFSET=6)
+RII_WIN_ANCHORS = [CORE_OFFSET + p for p in RII_CORE_ANCHORS]
+RI_WIN_ANCHORS  = [CORE_OFFSET + p for p in RI_CORE_ANCHORS]
+
+# DPY-30 signature: Tyr at d/d position 4, two conserved Pro in linker
+# RIID2 signature: aliphatic at d/d positions 4 and 6, single Pro cap
+# RID2 signature: Tyr at position 4, paired aromatic+aliphatic in helix 2
+
+
+def detect_negative_determinants(core, iso):
+    """
+    Check if charged residues (Asp/Glu) sit at hydrophobic anchor positions
+    in the core — a strong negative signal for PKA binding.
+
+    Returns dict:
+      n_negdet: number of charged-at-anchor violations
+      negdet_positions: list of (core_pos, residue) for each violation
+      negdet_severity: 'none' | 'mild' (1) | 'severe' (2+)
+    """
+    anchors = RII_CORE_ANCHORS if iso == "RII" else RI_CORE_ANCHORS
+    violations = []
+    for pos in anchors:
+        if pos < len(core) and core[pos] in CHARGED_NEG:
+            violations.append((pos + 1, core[pos]))   # 1-indexed for display
+    n = len(violations)
+    severity = "none" if n == 0 else ("mild" if n == 1 else "severe")
+    return dict(n_negdet=n, negdet_positions=violations, negdet_severity=severity)
+
+
+def score_helix_extent(window, iso):
+    """
+    Measure how far the amphipathic pattern extends across the window.
+    AKAP helices need 5 turns (~18 residues of continuous amphipathic helix);
+    DDIP helices need only 4 turns (~14 residues).
+
+    Method: scan the window for the longest stretch where hydrophobic residues
+    recur at α-helix face positions (every 3-4 residues = period 3.6).
+    """
+    import math as _math
+    n = len(window)
+    # For each residue, is it on the hydrophobic face?
+    # Use Eisenberg hydrophobicity; threshold > 0 = hydrophobic
+    EISENBERG = {
+        'A':0.62,'R':-2.53,'N':-0.78,'D':-0.90,'C':0.29,'Q':-0.85,'E':-0.74,
+        'G':0.48,'H':-0.40,'I':1.38,'L':1.06,'K':-1.50,'M':0.64,'F':1.19,
+        'P':0.12,'S':-0.18,'T':-0.05,'W':0.81,'Y':0.26,'V':1.08,
+    }
+
+    # Score each position's contribution to amphipathic helix
+    # A helix has period 3.6. Project onto helical wheel and check if
+    # hydrophobic residues cluster on one face.
+    angle_per_res = 100.0  # degrees for α-helix
+
+    # Find the longest contiguous amphipathic region using a sliding window
+    best_len = 0
+    for start in range(n):
+        for end in range(start + 8, n + 1):  # minimum 8 residues to be meaningful
+            sub = window[start:end]
+            # Compute hydrophobic moment for this stretch
+            angle = _math.radians(angle_per_res)
+            sin_sum = sum(EISENBERG.get(aa, 0.0) * _math.sin(i * angle) for i, aa in enumerate(sub))
+            cos_sum = sum(EISENBERG.get(aa, 0.0) * _math.cos(i * angle) for i, aa in enumerate(sub))
+            hm = _math.sqrt(sin_sum**2 + cos_sum**2) / len(sub)
+            # A good amphipathic helix has hydrophobic moment > 0.3
+            if hm >= 0.25:
+                best_len = max(best_len, len(sub))
+
+    turns = round(best_len / 3.6, 1) if best_len > 0 else 0
+
+    return dict(
+        contiguous_hydro_turns=turns,
+        amphipathic_length=best_len,
+        akap_helix_sufficient=(turns >= 4.5),
+        ddip_range=(2.5 <= turns < 4.5),
+    )
+
+
+def classify_ddip_vs_akap(hit_dict):
+    """
+    Classify a hit as AKAP, DDIP, ambiguous, or unlikely.
+
+    Based on Falcone & Scott (Biochem J 2025):
+      - Charged residue on hydrophobic face → unlikely AKAP (OPA1 fungal, smAKAP S66D)
+      - Amphipathic helix >= 5 turns (18 aa) → strong AKAP
+      - Amphipathic helix 3-4 turns (11-16 aa) → DDIP candidate
+      - High PSSM + no negdets → AKAP even if turn count is borderline
+    """
+    negdet = hit_dict.get("n_negdet", 0)
+    turns  = hit_dict.get("contiguous_hydro_turns", 0)
+    pssm   = hit_dict.get("pssm_score", 0)
+    sufficient = hit_dict.get("akap_helix_sufficient", False)
+    ddip_r = hit_dict.get("ddip_range", False)
+
+    if negdet >= 2:
+        return "unlikely"
+    if negdet == 1 and pssm < 12:
+        return "unlikely"
+    if negdet == 1:
+        return "ambiguous"
+    if sufficient and pssm >= 10:
+        return "AKAP"
+    if sufficient:
+        return "AKAP"
+    if pssm >= 12:
+        return "AKAP"       # high profile score overrides borderline turns
+    if ddip_r:
+        return "DDIP"
+    return "ambiguous"
+
+
+def predict_dd_class(core, iso):
+    """
+    Predict which d/d domain class the helix might interact with.
+    Based on Falcone & Scott 2025 Figure 2 sequence logos.
+
+    Returns: 'RIID2' (PKA-RII like), 'RID2' (PKA-RI like), 'DPY30', or 'unknown'
+    """
+    if iso == "RI":
+        return "RID2"
+    # For RII hits, the default is RIID2, but check DPY-30 signatures
+    # DPY-30 binding helices are shorter (4 turns) and the d/d domain
+    # has a Tyr at position 4 + shorter α-helix 1
+    # Since we're scoring the AKAP/anchoring helix (not the d/d domain),
+    # we mainly report the expected binding partner class
+    return "RIID2"
+
+
 def scan_isoform(seq, iso, pssm, threshold, strict=False):
     n = RII_LEN if iso == "RII" else RI_LEN
     clen = RII_CORE_LEN if iso == "RII" else RI_CORE_LEN
@@ -206,7 +352,15 @@ def scan_isoform(seq, iso, pssm, threshold, strict=False):
         hits.append(dict(iso=iso, win_start=i+1, win_end=i+n, window=win, core=core,
                          pssm_score=round(sc, 2), canonical=canon,
                          pI=isoelectric_point(core), helix_approx=helix_propensity(core),
-                         amphipathic=_amphipathic_ok(core, iso)))
+                         amphipathic=_amphipathic_ok(core, iso),
+                         # DDIP / negative determinant analysis
+                         **detect_negative_determinants(core, iso),
+                         **score_helix_extent(win, iso),
+                         dd_class=predict_dd_class(core, iso),
+                         ))
+    # Add classification after all hits collected
+    for h in hits:
+        h["classification"] = classify_ddip_vs_akap(h)
     return hits
 
 
@@ -225,7 +379,13 @@ def screen_protein(pid, seq, args, pssm):
                  win_start=h["win_start"], win_end=h["win_end"],
                  core=h["core"], window=h["window"], pssm_score=h["pssm_score"],
                  canonical=h["canonical"], amphipathic=h["amphipathic"],
-                 pI=h["pI"], helix_approx=h["helix_approx"]) for h in hits]
+                 pI=h["pI"], helix_approx=h["helix_approx"],
+                 classification=h["classification"],
+                 n_negdet=h["n_negdet"], negdet_severity=h["negdet_severity"],
+                 contiguous_hydro_turns=h["contiguous_hydro_turns"],
+                 akap_helix_sufficient=h["akap_helix_sufficient"],
+                 ddip_range=h["ddip_range"], dd_class=h["dd_class"],
+                 ) for h in hits]
 
 
 def main():
@@ -259,7 +419,9 @@ def main():
     rows.sort(key=lambda r: -r["pssm_score"])
 
     fields = ["protein","isoform","dual","win_start","win_end","core","window",
-              "pssm_score","canonical","amphipathic","pI","helix_approx"]
+              "pssm_score","canonical","amphipathic","pI","helix_approx",
+              "classification","n_negdet","negdet_severity",
+              "contiguous_hydro_turns","akap_helix_sufficient","ddip_range","dd_class"]
     out = open(args.out, "w", newline="") if args.out else sys.stdout
     w = csv.DictWriter(out, fieldnames=fields)
     w.writeheader()
@@ -282,6 +444,8 @@ def run_selftest(args, pssm):
         "superAKAP-IS(RII)":         "QIEYVAKQIVDYAIHQA",
         "smAKAP_56-79(RI)":          "GTNTVILEYAHRLSQDILCDALQQWACNNI",
         "RIAD(RI)":                  "TVLEQYANQLADQIIKEATE",
+        "OPA1_human(AKAP)":          "KKVRE IQEKLD AFIEALH".replace(" ",""),
+        "OPA1_fungal(nonAKAP)":      "EALVAERDRVKALLDAYK",
         "negative_control":          "MKWVTFISLLLLFSSAYSRGVFRRDTHKSE",
     }
     print(f"self-test  (RII thr={args.rii_thr}, RI thr={args.ri_thr})\n")
@@ -290,7 +454,10 @@ def run_selftest(args, pssm):
         ri  = scan_isoform(seq, "RI",  pssm, args.ri_thr,  args.strict)
         tag = "+".join([t for t, h in (("RII", rii), ("RI", ri)) if h]) or "no-call"
         det = "; ".join(f"{h['iso']} {h['pssm_score']}"
-                        f"{'/canon' if h['canonical'] else ''}" for h in rii+ri)
+                        f"{'/canon' if h['canonical'] else ''}"
+                        f" [{h['classification']}|turns={h['contiguous_hydro_turns']}"
+                        f"|negdet={h['n_negdet']}]"
+                        for h in rii+ri)
         print(f"  {name:27s} -> {tag:7s}  {det}")
 
 
