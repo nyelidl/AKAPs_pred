@@ -420,26 +420,48 @@ def main():
     ([DOI: 10.1042/BCJ20253085](https://doi.org/10.1042/BCJ20253085))
     """)
 
+    with st.expander("👋 Beginner guide: what this app does and how to use it", expanded=False):
+        st.markdown("""
+        This app looks through protein sequences and asks: **does this protein contain a short helix that may bind PKA regulatory subunits?**
+
+        **Simple workflow**
+        1. Choose an input method below.
+        2. Provide a protein sequence, FASTA file, CSV file, or a UniProt/protein name.
+        3. Click **Run AKAP Screen**.
+        4. Look first at **classification**, **PSSM Score**, **ML Prob**, and **NegDet**.
+
+        **How to read the result quickly**
+        - **AKAP** = strongest prediction; good candidate for follow-up.
+        - **ambiguous** = possible signal; inspect manually or validate experimentally.
+        - **DDIP** = may bind a D/D-like groove but is not predicted as a strong PKA anchor.
+        - **unlikely** = weak or disrupted motif, often because acidic residues interrupt the hydrophobic face.
+
+        This is a **screening and prioritization tool**, not final experimental proof of PKA binding.
+        """)
+
     # ── Sidebar: Parameters ──
     with st.sidebar:
         st.header("⚙️ Parameters")
 
         st.subheader("PSSM Thresholds")
+        st.caption("Beginner hint: keep these defaults first. Increase thresholds only when you want fewer, stricter hits.")
         rii_thr = st.slider("PKA-RIIα threshold", 3.0, 15.0, 7.0, 0.5,
-                            help="Default 7.0 recovers 99.2% of known motifs")
+                            help="Default 7.0 is sensitive for RII-like motifs. Higher value = fewer but stronger hits.")
         ri_thr = st.slider("PKA-RIα threshold", 5.0, 25.0, 12.0, 0.5,
-                           help="Default 12.0 recovers 100% of known motifs")
+                           help="Default 12.0 is sensitive for RI-like motifs. Higher value = fewer but stronger hits.")
 
         st.subheader("Options")
         strict = st.checkbox("Require literal regex match", value=False,
-                             help="Only report hits that also match the consensus regex (lower recall)")
+                             help="Advanced option. Leave OFF for normal use. Turning it ON gives fewer hits and may miss real AKAP-like motifs.")
 
         use_ml = st.checkbox("Enable ML scoring", value=_HAVE_ML,
                              disabled=not _HAVE_ML,
                              help="Score hits with the GradientBoosting classifier")
         ml_thr = 0.0
         if use_ml and _HAVE_ML:
-            ml_thr = st.slider("ML probability threshold", 0.0, 1.0, 0.5, 0.05)
+            st.caption("Beginner hint: 0.5 is a balanced ML cutoff. Use 0.7–0.8 for stricter prioritization.")
+            ml_thr = st.slider("ML probability threshold", 0.0, 1.0, 0.5, 0.05,
+                               help="Minimum ML confidence required. 0.5 = moderate; 0.7–0.8 = stricter; 0.0 = do not filter by ML.")
 
         st.divider()
         st.subheader("📊 About the tool")
@@ -469,6 +491,7 @@ def main():
 
     # ── Input ──
     st.header("📥 Input")
+    st.info("For non-experts: the easiest mode is **Search by protein name / UniProt ID**. Type one protein or gene name per line, search UniProt, then click **Run AKAP Screen**.")
     input_method = st.radio(
         "Choose input method:",
         ["Paste sequence(s)", "Upload FASTA file", "Upload CSV file",
@@ -479,6 +502,7 @@ def main():
     proteins = []  # list of (name, sequence)
 
     if input_method == "Paste sequence(s)":
+        st.caption("Paste either FASTA format starting with `>` or a raw amino-acid sequence using one-letter amino-acid codes.")
         text = st.text_area(
             "Paste FASTA or raw sequence(s):",
             height=180,
@@ -492,6 +516,7 @@ def main():
                 proteins = [("input_sequence", seq)]
 
     elif input_method == "Upload FASTA file":
+        st.caption("Use this when you already have protein sequences saved as FASTA. Each sequence should start with a header line beginning with `>`.")
         uploaded = st.file_uploader("Upload FASTA file", type=["fasta", "fa", "faa", "txt"])
         if uploaded:
             text = uploaded.read().decode("utf-8")
@@ -499,6 +524,9 @@ def main():
             st.success(f"Loaded {len(proteins)} sequence(s)")
 
     elif input_method == "Upload CSV file":
+        st.caption("CSV columns can be named flexibly: `protein`, `name`, or `gene` for names; `uniprot` or `accession` for UniProt IDs; `sequence` or `seq` for sequences.")
+        with st.expander("CSV example", expanded=False):
+            st.code("protein_name,uniprot_id,sequence\nAKAP10,O43572,\nEzrin,,\nMyProtein,,MAAADSGRLH...", language="csv")
         uploaded = st.file_uploader("Upload CSV file", type=["csv", "tsv", "txt"])
         if uploaded:
             sep = "\t" if uploaded.name.endswith(".tsv") else ","
@@ -531,6 +559,8 @@ def main():
         The app will search UniProt and fetch the sequences automatically.
 
         *Examples: `Ezrin`, `AKAP10`, `WAVE1`, `P15311`, `O43572`*
+
+        **Hint:** If you use a general name, the app shows UniProt matches and automatically uses the top match. For publication-quality work, check that the accession, organism, and sequence length are correct before interpreting hits.
         """)
 
         query_text = st.text_area(
@@ -665,6 +695,7 @@ def main():
 
     # ── Run screening ──
     if proteins:
+        st.caption("Ready to screen. Larger proteins or many proteins may produce many candidate windows; rank them by classification, PSSM score, ML probability, and negative determinants.")
         if st.button("🔍 Run AKAP Screen", type="primary", use_container_width=True):
             with st.spinner("Screening..."):
                 t0 = time.time()
@@ -672,6 +703,21 @@ def main():
                 elapsed = time.time() - t0
 
             st.header("📊 Results")
+            with st.expander("📖 How to interpret the results", expanded=True):
+                st.markdown("""
+                **Start with these columns:**
+
+                | Column | Meaning | Practical interpretation |
+                |---|---|---|
+                | **classification** | Overall class from motif features | **AKAP** is strongest; **ambiguous** needs caution; **DDIP** may bind D/D-like domains but is not a strong PKA-anchor call; **unlikely** is low priority. |
+                | **isoform** | Predicted PKA regulatory subunit preference | **RII** = PKA-RII-like motif; **RI** = PKA-RI-like motif. |
+                | **pssm_score** | Similarity to known AKAP motifs | Higher is stronger. Use it to rank hits within the same isoform. |
+                | **ml_prob** | Machine-learning confidence, if model is available | Closer to 1.0 is stronger; around 0.5 is moderate; below 0.5 is weaker. |
+                | **n_negdet** | Number of acidic residues disrupting hydrophobic anchor positions | 0 is best. More negative determinants reduce confidence. |
+                | **core/window** | Predicted motif sequence | Use these sequences for alignment, mutation design, or peptide validation. |
+
+                **Important:** A predicted hit means “candidate AKAP-like motif”, not confirmed binding. Strong candidates should be checked by literature, structure/secondary-structure prediction, conservation, mutagenesis, peptide binding, or pull-down/PKA-localization assays.
+                """)
 
             hit_proteins = set(results["protein"]) if len(results) > 0 else set()
             all_proteins = set(p[0] for p in proteins)
@@ -701,13 +747,20 @@ def main():
                     results[[c for c in display_cols if c in results.columns]],
                     use_container_width=True,
                     column_config={
-                        "pssm_score": st.column_config.NumberColumn("PSSM Score", format="%.2f"),
-                        "ml_prob": st.column_config.ProgressColumn("ML Prob", min_value=0, max_value=1, format="%.3f"),
-                        "pI": st.column_config.NumberColumn("pI", format="%.2f"),
-                        "helix_turns": st.column_config.NumberColumn("Helix Turns", format="%.1f"),
-                        "dual": st.column_config.CheckboxColumn("Dual"),
-                        "canonical": st.column_config.CheckboxColumn("Canonical"),
-                        "amphipathic": st.column_config.CheckboxColumn("Amphipathic"),
+                        "pssm_score": st.column_config.NumberColumn("PSSM Score", format="%.2f",
+                            help="Similarity to known AKAP motifs. Higher = more AKAP-like. Rank RII and RI hits separately."),
+                        "ml_prob": st.column_config.ProgressColumn("ML Prob", min_value=0, max_value=1, format="%.3f",
+                            help="Machine-learning confidence. Values near 1.0 are stronger; around 0.5 is moderate."),
+                        "pI": st.column_config.NumberColumn("pI", format="%.2f",
+                            help="Isoelectric point of the predicted motif core. This is annotation, not a pass/fail criterion."),
+                        "helix_turns": st.column_config.NumberColumn("Helix Turns", format="%.1f",
+                            help="Approximate number of hydrophobic-face helical turns. Longer continuous hydrophobic face supports AKAP-like binding."),
+                        "dual": st.column_config.CheckboxColumn("Dual",
+                            help="True if RI-like and RII-like hits overlap in the same protein region."),
+                        "canonical": st.column_config.CheckboxColumn("Canonical",
+                            help="True if the motif also matches the strict consensus pattern. False does not automatically mean invalid."),
+                        "amphipathic": st.column_config.CheckboxColumn("Amphipathic",
+                            help="True if the sequence has a plausible amphipathic helix pattern."),
                         "classification": st.column_config.TextColumn("Class",
                             help="AKAP=strong PKA anchor, DDIP=D/D domain interactor (no PKA), "
                                  "unlikely=charged residue disrupts hydrophobic face"),
@@ -728,6 +781,7 @@ def main():
 
                 # ── Per-protein detail view ──
                 st.subheader("🔬 Detailed View")
+                st.caption("The protein map shows where the predicted motif is located. The helical wheel helps you see whether hydrophobic residues cluster on one face of the helix, which is expected for AKAP motifs.")
                 sel_protein = st.selectbox("Select protein:", sorted(hit_proteins))
                 sel_hits = results[results["protein"] == sel_protein]
                 sel_seq = dict(proteins)[sel_protein]
@@ -794,6 +848,7 @@ def main():
             # ── Proteins without hits ──
             if no_hit:
                 st.subheader("❌ Proteins without AKAP motifs")
+                st.info("No hit means no motif passed the current thresholds. It does not prove the protein can never interact with PKA; try default thresholds, check sequence correctness, or inspect known splice isoforms.")
                 for p in sorted(no_hit):
                     st.write(f"  • {p}")
 
