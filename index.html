@@ -59,6 +59,19 @@
   .footer{margin-top:36px;color:#6b7a8f;font-size:14px;text-align:center}
   .legend li{margin:6px 0}
   code{background:#eef4ff;padding:2px 6px;border-radius:6px;color:#1141a3}
+
+  .cta-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:22px;align-items:center}
+  .cta-main{
+    display:inline-flex;align-items:center;gap:10px;
+    background:linear-gradient(135deg,var(--blue),var(--blue2));
+    color:#fff;text-decoration:none;font-weight:800;
+    padding:14px 20px;border-radius:14px;
+    box-shadow:0 10px 24px rgba(47,109,246,.25);
+    transition:.15s transform ease,.15s box-shadow ease;
+  }
+  .cta-main:hover{transform:translateY(-1px);box-shadow:0 14px 30px rgba(47,109,246,.30)}
+  .cta-sub{color:var(--muted);font-size:15px}
+  .quick-start-box{background:#eef7ff;border:1px solid #cde6ff;border-radius:16px;padding:16px;margin-top:16px}
 </style>
 </head>
 <body>
@@ -72,6 +85,10 @@
       <span class="badge">มีแนวทางแปลผล</span>
       <span class="badge">ใช้กับชื่อโปรตีนหรือ UniProt ID ได้</span>
     </div>
+    <div class="cta-row">
+      <a class="cta-main" href="https://akapspred.streamlit.app/" target="_blank" rel="noopener noreferrer">🚀 Start to use AKAP Screener</a>
+      <span class="cta-sub">กดปุ่มนี้เพื่อเปิดโปรแกรมจริงในแท็บใหม่</span>
+    </div>
   </section>
 
   <section>
@@ -83,6 +100,17 @@
         <li>ช่วยแยกผลลัพธ์เป็น <strong>AKAP / DDIP / ambiguous / unlikely</strong></li>
         <li>ช่วยบอกแนวโน้มความจำเพาะต่อ <strong>RI</strong> หรือ <strong>RII</strong></li>
       </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>เริ่มใช้งานอย่างรวดเร็ว</h2>
+    <div class="card">
+      <p>ถ้าต้องการเริ่มใช้งานทันที ให้กดปุ่มด้านล่างเพื่อเปิดหน้าโปรแกรม AKAP Domain Screener</p>
+      <div class="quick-start-box">
+        <a class="cta-main" href="https://akapspred.streamlit.app/" target="_blank" rel="noopener noreferrer">🚀 Start to use</a>
+        <p style="margin-top:12px;margin-bottom:0">หลังจากเปิดเว็บแล้ว ให้เลือก <strong>Search by protein name / UniProt ID</strong> ใส่ชื่อโปรตีน เช่น <code>SPHKAP</code> แล้วกด <strong>Search UniProt</strong> จากนั้นกด <strong>Run AKAP Screen</strong></p>
+      </div>
     </div>
   </section>
 
@@ -230,6 +258,14 @@ O43572</div>
         <li>hit ที่ดีควรนำไปตรวจต่อด้วยข้อมูลอื่น เช่น conservation, structure prediction, mutational analysis หรือ biochemical assay</li>
         <li>ถ้าโปรตีนหนึ่งมีหลาย hit ให้พิจารณาทั้งคะแนน, classification และตำแหน่งในโปรตีนร่วมกัน</li>
       </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="card" style="text-align:center">
+      <h2 style="margin-top:0">พร้อมเริ่มใช้งานแล้ว?</h2>
+      <p>กดปุ่มนี้เพื่อเปิดโปรแกรมจริง</p>
+      <a class="cta-main" href="https://akapspred.streamlit.app/" target="_blank" rel="noopener noreferrer">🚀 Start to use AKAP Screener</a>
     </div>
   </section>
 
