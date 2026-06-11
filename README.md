@@ -24,6 +24,32 @@ An AKAP domain is a short amphipathic α-helix (3–4 turns) that docks its hydr
 
 ---
 
+
+---
+
+## Beginner manual
+
+For non-expert users, see **`USER_MANUAL.md`**. It explains:
+
+- Which input mode to use.
+- How to fetch proteins from UniProt.
+- What each result column means.
+- How to decide whether a hit is strong or weak.
+- What to do after getting predicted hits.
+
+### Fast interpretation guide
+
+| Result item | Good sign | Caution sign |
+|---|---|---|
+| `classification` | `AKAP` | `ambiguous`, `DDIP`, or `unlikely` |
+| `pssm_score` | Higher than other hits of the same isoform | Near threshold |
+| `ml_prob` | Close to 1.0 | Around or below 0.5 |
+| `n_negdet` | 0 | 1 or more |
+| `amphipathic` | True | False |
+| `canonical` | True supports the hit | False is not automatic rejection |
+
+Use the screener as a prioritization tool. A predicted motif is a candidate for follow-up, not final proof of PKA binding.
+
 ## Quick start
 
 ### Web app (Streamlit)
