@@ -27,18 +27,28 @@ sys.path.insert(0, SCRIPT_DIR)
 
 import akap_screen as A
 
-# Try ML model
+# ─── Load ML model bundle (prefer v2) ───
 _HAVE_ML = False
+_ML_BUNDLE = None
+_ML_MODEL_PATH = None
+_ML_METADATA = {}
 try:
-    import joblib
-    ML_MODEL_PATH = os.path.join(SCRIPT_DIR, "akap_ml_model.joblib")
-    if os.path.exists(ML_MODEL_PATH):
-        _ML_BUNDLE = joblib.load(ML_MODEL_PATH)
-        _HAVE_ML = True
-    # Import ML feature extraction
-    from akap_ml import extract_features, predict_window, hydrophobic_moment, EISENBERG
-except Exception:
-    pass
+    # Use backend loader so CLI and app share the same model loading behavior.
+    _ML_BUNDLE = A.load_ml_model()
+    _HAVE_ML = _ML_BUNDLE is not None
+    for _candidate in ("akap_ml_model_v2.joblib", "akap_ml_model.joblib"):
+        _p = os.path.join(SCRIPT_DIR, _candidate)
+        if os.path.exists(_p):
+            _ML_MODEL_PATH = _p
+            break
+    _meta_path = os.path.join(SCRIPT_DIR, "akap_ml_model_v2_metadata.json")
+    if os.path.exists(_meta_path):
+        with open(_meta_path) as _fh:
+            _ML_METADATA = json.load(_fh)
+except Exception as _e:
+    _HAVE_ML = False
+    _ML_BUNDLE = None
+    _ML_METADATA = {}
 
 # ─── Load PSSM ───
 PSSM = A.load_pssm()
@@ -209,62 +219,45 @@ def resolve_protein_input(name_or_id):
 
 
 def run_screen(proteins, rii_thr, ri_thr, use_ml, ml_thr, strict):
-    """Run the AKAP screen on a list of (name, sequence) pairs."""
-    results = []
-    for pid, seq in proteins:
-        spec = A.predict_specificity(seq, PSSM) if hasattr(A, "predict_specificity") else {}
-        for iso, wlen, thr in [("RII", 24, rii_thr), ("RI", 30, ri_thr)]:
-            hits = A.scan_isoform(seq, iso, PSSM, thr, strict)
-            for h in hits:
-                row = dict(
-                    protein=pid, isoform=iso,
-                    predicted_specificity=spec.get("predicted_specificity", ""),
-                    ri_best=spec.get("ri_best"),
-                    rii_best=spec.get("rii_best"),
-                    ri_rii_ratio=spec.get("ri_rii_ratio"),
-                    start=h["win_start"], end=h["win_end"],
-                    core=h["core"], window=h["window"],
-                    pssm_score=h["pssm_score"], canonical=h["canonical"],
-                    amphipathic=h["amphipathic"], pI=h["pI"],
-                    helix_approx=h["helix_approx"],
-                    # DDIP analysis (Falcone & Scott 2025)
-                    classification=h.get("classification", ""),
-                    n_negdet=h.get("n_negdet", 0),
-                    negdet_severity=h.get("negdet_severity", "none"),
-                    helix_turns=h.get("contiguous_hydro_turns", 0),
-                    dd_class=h.get("dd_class", ""),
-                )
-                # ML scoring
-                if use_ml and _HAVE_ML and iso in _ML_BUNDLE:
-                    prob, feats = predict_window(
-                        h["window"], iso, _ML_BUNDLE[iso], PSSM[iso]["pssm"])
-                    row["ml_prob"] = round(prob, 4)
-                    row["hydro_moment"] = round(feats["hydro_moment"], 4)
-                    row["fft_amphi"] = round(feats["fft_amphi"], 4)
-                else:
-                    row["ml_prob"] = None
-                    row["hydro_moment"] = None
-                    row["fft_amphi"] = None
-                results.append(row)
+    """Run AKAP screen using the shared backend in akap_screen.py.
 
-    df = pd.DataFrame(results)
-    if len(df) > 0:
-        # Dual-specificity flag
-        df["dual"] = False
-        for pid in df["protein"].unique():
-            sub = df[df["protein"] == pid]
-            if set(sub["isoform"]) == {"RII", "RI"}:
-                for i in sub.index:
-                    for j in sub.index:
-                        if df.loc[i, "isoform"] != df.loc[j, "isoform"]:
-                            if not (df.loc[i, "end"] < df.loc[j, "start"] or
-                                    df.loc[j, "end"] < df.loc[i, "start"]):
-                                df.loc[i, "dual"] = True
-        # Filter by ML threshold if active
-        if use_ml and _HAVE_ML and ml_thr > 0 and "ml_prob" in df.columns:
-            df = df[df["ml_prob"].isna() | (df["ml_prob"] >= ml_thr)]
-        df = df.sort_values("pssm_score", ascending=False).reset_index(drop=True)
-    return df
+    This keeps Streamlit consistent with the CLI: ML v2, length-aware correction,
+    background_risk, and proteomic confidence all come from A.screen_protein().
+    """
+    from types import SimpleNamespace
+
+    # Make the app slider affect the backend high-confidence threshold.
+    # Very-high remains stricter than high.
+    if use_ml:
+        A.ML_HIGH_THR = float(ml_thr)
+        A.ML_VHIGH_THR = max(float(ml_thr) + 0.10, 0.90)
+
+    args = SimpleNamespace(
+        ri_only=False,
+        rii_only=False,
+        rii_thr=rii_thr,
+        ri_thr=ri_thr,
+        strict=strict,
+    )
+
+    ml_bundle = _ML_BUNDLE if (use_ml and _HAVE_ML) else None
+    rows = []
+    for pid, seq in proteins:
+        rows.extend(A.screen_protein(pid, seq, args, PSSM, ml_bundle=ml_bundle))
+
+    df = pd.DataFrame(rows)
+    if len(df) == 0:
+        return df
+
+    # Backward-compatible aliases for existing app plotting code.
+    if "start" not in df.columns and "win_start" in df.columns:
+        df["start"] = df["win_start"]
+    if "end" not in df.columns and "win_end" in df.columns:
+        df["end"] = df["win_end"]
+    if "helix_turns" not in df.columns and "contiguous_hydro_turns" in df.columns:
+        df["helix_turns"] = df["contiguous_hydro_turns"]
+
+    return df.sort_values(["passes_proteomic_filter", "pssm_score"], ascending=[False, False]).reset_index(drop=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -404,13 +397,10 @@ def main():
         initial_sidebar_state="expanded",
     )
 
-    # Persist UniProt-resolved proteins across Streamlit reruns.
-    # Without this, clicking "Run AKAP Screen" reruns the script and resets
-    # the local `proteins = []`, so nothing is screened after a successful fetch.
     if "resolved_proteins" not in st.session_state:
-        st.session_state.resolved_proteins = []
-    if "resolved_queries" not in st.session_state:
-        st.session_state.resolved_queries = []
+        st.session_state["resolved_proteins"] = []
+    if "last_uniprot_queries" not in st.session_state:
+        st.session_state["last_uniprot_queries"] = ""
 
     # ── Header ──
     st.markdown("""
@@ -425,58 +415,53 @@ def main():
     ([DOI: 10.1042/BCJ20253085](https://doi.org/10.1042/BCJ20253085))
     """)
 
-    with st.expander("👋 Beginner guide: what this app does and how to use it", expanded=False):
-        st.markdown("""
-        This app looks through protein sequences and asks: **does this protein contain a short helix that may bind PKA regulatory subunits?**
-
-        **Simple workflow**
-        1. Choose an input method below.
-        2. Provide a protein sequence, FASTA file, CSV file, or a UniProt/protein name.
-        3. Click **Run AKAP Screen**.
-        4. Look first at **classification**, **PSSM Score**, **ML Prob**, and **NegDet**.
-
-        **How to read the result quickly**
-        - **AKAP** = strongest prediction; good candidate for follow-up.
-        - **ambiguous** = possible signal; inspect manually or validate experimentally.
-        - **DDIP** = may bind a D/D-like groove but is not predicted as a strong PKA anchor.
-        - **unlikely** = weak or disrupted motif, often because acidic residues interrupt the hydrophobic face.
-
-        This is a **screening and prioritization tool**, not final experimental proof of PKA binding.
-        """)
-
     # ── Sidebar: Parameters ──
     with st.sidebar:
         st.header("⚙️ Parameters")
 
+        st.subheader("🎯 Screening Mode")
+        screening_mode = st.radio(
+            "Select mode:",
+            ["Sensitive discovery", "ML-prioritized proteomic confidence"],
+            help="Sensitive = more candidates, higher FPs. "
+                 "ML-prioritized = stricter, uses ML + length-aware background risk for large protein lists.",
+        )
+        if screening_mode == "Sensitive discovery":
+            st.info("💡 Shows all PSSM hits. Use `proteomic_confidence` column to triage.")
+        else:
+            st.success("🔬 Only ML/rule-supported high/very_high confidence hits will be shown.")
+
         st.subheader("PSSM Thresholds")
-        st.caption("Beginner hint: keep these defaults first. Increase thresholds only when you want fewer, stricter hits.")
         rii_thr = st.slider("PKA-RIIα threshold", 3.0, 15.0, 7.0, 0.5,
-                            help="Default 7.0 is sensitive for RII-like motifs. Higher value = fewer but stronger hits.")
+                            help="Default 7.0 recovers 99.2% of known motifs")
         ri_thr = st.slider("PKA-RIα threshold", 5.0, 25.0, 12.0, 0.5,
-                           help="Default 12.0 is sensitive for RI-like motifs. Higher value = fewer but stronger hits.")
+                           help="Default 12.0 recovers 100% of known motifs")
 
         st.subheader("Options")
         strict = st.checkbox("Require literal regex match", value=False,
-                             help="Advanced option. Leave OFF for normal use. Turning it ON gives fewer hits and may miss real AKAP-like motifs.")
+                             help="Only report hits that also match the consensus regex (lower recall)")
 
         use_ml = st.checkbox("Enable ML scoring", value=_HAVE_ML,
                              disabled=not _HAVE_ML,
-                             help="Score hits with the GradientBoosting classifier")
+                             help="Use the selected v2 ML model as the second-stage proteomic prioritization layer")
         ml_thr = 0.0
         if use_ml and _HAVE_ML:
-            st.caption("Beginner hint: 0.5 is a balanced ML cutoff. Use 0.7–0.8 for stricter prioritization.")
-            ml_thr = st.slider("ML probability threshold", 0.0, 1.0, 0.5, 0.05,
-                               help="Minimum ML confidence required. 0.5 = moderate; 0.7–0.8 = stricter; 0.0 = do not filter by ML.")
+            ml_thr = st.slider("ML high-confidence threshold", 0.0, 1.0, 0.80, 0.05)
 
         st.divider()
         st.subheader("📊 About the tool")
         st.markdown("""
         **PSSM score**: Log-odds profile from 849 RII + 28 RI motifs. Higher = more AKAP-like.
 
-        **ML probability**: GradientBoosting classifier trained on biophysical features
-        (hydrophobic moment, FFT amphipathicity, helix propensity, anchor hydrophobicity).
+        **ML probability**: second-stage proteomic prioritization model using interpretable
+        sequence-derived features (PSSM score, hydrophobic moment, amphipathicity,
+        helix propensity, anchor hydrophobicity, charge/composition features).
 
-        **RII AUC = 0.999** | **RI AUC = 1.000**
+        **Length-aware background risk** accounts for the fact that long proteins have
+        more sliding-window chances to produce random high-scoring PSSM hits.
+
+        Validation metrics are loaded from `akap_ml_model_v2_metadata.json` when available;
+        do not treat internal metrics as external biological validation.
 
         ---
 
@@ -496,7 +481,6 @@ def main():
 
     # ── Input ──
     st.header("📥 Input")
-    st.info("For non-experts: the easiest mode is **Search by protein name / UniProt ID**. Type one protein or gene name per line, search UniProt, then click **Run AKAP Screen**.")
     input_method = st.radio(
         "Choose input method:",
         ["Paste sequence(s)", "Upload FASTA file", "Upload CSV file",
@@ -507,7 +491,6 @@ def main():
     proteins = []  # list of (name, sequence)
 
     if input_method == "Paste sequence(s)":
-        st.caption("Paste either FASTA format starting with `>` or a raw amino-acid sequence using one-letter amino-acid codes.")
         text = st.text_area(
             "Paste FASTA or raw sequence(s):",
             height=180,
@@ -521,7 +504,6 @@ def main():
                 proteins = [("input_sequence", seq)]
 
     elif input_method == "Upload FASTA file":
-        st.caption("Use this when you already have protein sequences saved as FASTA. Each sequence should start with a header line beginning with `>`.")
         uploaded = st.file_uploader("Upload FASTA file", type=["fasta", "fa", "faa", "txt"])
         if uploaded:
             text = uploaded.read().decode("utf-8")
@@ -529,9 +511,6 @@ def main():
             st.success(f"Loaded {len(proteins)} sequence(s)")
 
     elif input_method == "Upload CSV file":
-        st.caption("CSV columns can be named flexibly: `protein`, `name`, or `gene` for names; `uniprot` or `accession` for UniProt IDs; `sequence` or `seq` for sequences.")
-        with st.expander("CSV example", expanded=False):
-            st.code("protein_name,uniprot_id,sequence\nAKAP10,O43572,\nEzrin,,\nMyProtein,,MAAADSGRLH...", language="csv")
         uploaded = st.file_uploader("Upload CSV file", type=["csv", "tsv", "txt"])
         if uploaded:
             sep = "\t" if uploaded.name.endswith(".tsv") else ","
@@ -564,8 +543,6 @@ def main():
         The app will search UniProt and fetch the sequences automatically.
 
         *Examples: `Ezrin`, `AKAP10`, `WAVE1`, `P15311`, `O43572`*
-
-        **Hint:** If you use a general name, the app shows UniProt matches and automatically uses the top match. For publication-quality work, check that the accession, organism, and sequence length are correct before interpreting hits.
         """)
 
         query_text = st.text_area(
@@ -581,73 +558,43 @@ def main():
         with col_org2:
             reviewed_only = st.checkbox("Reviewed (Swiss-Prot) only", value=True)
 
-        c_search, c_clear = st.columns([3, 1])
-        with c_clear:
-            if st.button("Clear fetched proteins", use_container_width=True):
-                st.session_state.resolved_proteins = []
-                st.session_state.resolved_queries = []
-                st.rerun()
-
         if query_text.strip():
             queries = [q.strip() for q in query_text.strip().split("\n") if q.strip()]
 
-            with c_search:
-                do_search = st.button(
-                    f"🔍 Search UniProt ({len(queries)} queries)",
-                    use_container_width=True
-                )
-
-            if do_search:
-                # IMPORTANT: save results in session_state, because Streamlit reruns
-                # the whole script when the next button is clicked.
-                st.session_state.resolved_proteins = []
-                st.session_state.resolved_queries = queries
-
+            if st.button(f"🔍 Search UniProt ({len(queries)} queries)", use_container_width=True):
                 st.divider()
                 prog = st.progress(0)
 
+                # Store search results in session state for user selection
+                all_search_results = []
                 for idx, query in enumerate(queries):
                     st.markdown(f"**Searching: `{query}`**")
 
-                    # Check if it looks like a UniProt accession, including isoform IDs.
+                    # Check if it looks like a UniProt accession
                     is_accession = bool(
-                        re.match(r'^[OPQ][0-9][A-Z0-9]{3}[0-9](?:-\d+)?$', query) or
-                        re.match(r'^[A-NR-Z][0-9][A-Z][A-Z0-9]{2}[0-9](?:-\d+)?$', query)
+                        re.match(r'^[OPQ][0-9][A-Z0-9]{3}[0-9]$', query) or
+                        re.match(r'^[A-NR-Z][0-9][A-Z][A-Z0-9]{2}[0-9]$', query)
                     )
 
                     if is_accession:
                         seq, err = fetch_uniprot(query)
                         if seq:
-                            st.session_state.resolved_proteins.append((query, seq))
+                            proteins.append((query, seq))
                             st.success(f"  ✅ {query}: fetched ({len(seq)} aa)")
                         else:
                             st.warning(f"  ❌ {query}: {err}")
                     else:
                         org = "" if organism == "Any" else organism
-                        results, err = search_uniprot(
-                            query, organism=org,
-                            reviewed=reviewed_only, max_results=5
-                        )
-
-                        # Fallback 1: same organism, but include unreviewed entries.
-                        if not results and reviewed_only:
-                            results, err = search_uniprot(
-                                query, organism=org,
-                                reviewed=False, max_results=5
-                            )
-
-                        # Fallback 2: any organism, unreviewed, useful for non-human names.
-                        if not results and org:
-                            results, err = search_uniprot(
-                                query, organism="",
-                                reviewed=False, max_results=5
-                            )
-
-                        if err and not results:
+                        results, err = search_uniprot(query, organism=org,
+                                                       reviewed=reviewed_only, max_results=5)
+                        if err:
                             st.warning(f"  ❌ Search error: {err}")
-
+                        elif not results:
+                            # Retry without reviewed filter
+                            results, _ = search_uniprot(query, organism=org,
+                                                         reviewed=False, max_results=5)
                         if results:
-                            # Show results as a table for transparency.
+                            # Show results as a table for transparency
                             res_df = pd.DataFrame([
                                 {"": "✅" if i == 0 else "",
                                  "Accession": r["accession"],
@@ -659,48 +606,34 @@ def main():
                             ])
                             st.dataframe(res_df, use_container_width=True, hide_index=True)
 
-                            # Use top hit.
+                            # Use top hit
                             top = results[0]
                             display = top["gene"] or top["accession"]
-                            st.session_state.resolved_proteins.append(
-                                (f'{display}_{top["accession"]}', top["sequence"])
-                            )
+                            proteins.append((f'{display}_{top["accession"]}', top["sequence"]))
                             st.success(
                                 f"  → Using top hit: **{top['name'][:60]}** "
-                                f"({top['accession']}, {top['gene']}, {top['length']} aa)"
-                            )
+                                f"({top['accession']}, {top['gene']}, {top['length']} aa)")
                         else:
                             st.warning(f"  ❌ No UniProt results for '{query}'")
 
                     prog.progress((idx + 1) / len(queries))
                     time.sleep(0.3)  # Be polite to API
 
-                if st.session_state.resolved_proteins:
+                if proteins:
+                    st.session_state["resolved_proteins"] = list(proteins)
+                    st.session_state["last_uniprot_queries"] = query_text
                     st.divider()
-                    st.success(
-                        f"✅ {len(st.session_state.resolved_proteins)} protein(s) ready for screening. "
-                        f"Click **Run AKAP Screen** below."
-                    )
+                    st.success(f"✅ {len(proteins)} protein(s) ready for screening. "
+                              f"Click **Run AKAP Screen** below.")
 
-        # Rehydrate the local variable on every rerun.
-        # This makes the downstream "Run AKAP Screen" button visible and functional
-        # after a successful UniProt fetch.
-        proteins = list(st.session_state.resolved_proteins)
-
+    # Keep UniProt search results across Streamlit reruns.
+    if input_method == "Search by protein name / UniProt ID" and not proteins:
+        proteins = st.session_state.get("resolved_proteins", [])
         if proteins:
-            with st.expander("Fetched proteins ready for screening", expanded=True):
-                st.dataframe(
-                    pd.DataFrame([
-                        {"Protein": name, "Length": len(seq)}
-                        for name, seq in proteins
-                    ]),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+            st.info(f"Using {len(proteins)} resolved UniProt protein(s) from the previous search.")
 
     # ── Run screening ──
     if proteins:
-        st.caption("Ready to screen. Larger proteins or many proteins may produce many candidate windows; rank them by classification, PSSM score, ML probability, and negative determinants.")
         if st.button("🔍 Run AKAP Screen", type="primary", use_container_width=True):
             with st.spinner("Screening..."):
                 t0 = time.time()
@@ -708,21 +641,10 @@ def main():
                 elapsed = time.time() - t0
 
             st.header("📊 Results")
-            with st.expander("📖 How to interpret the results", expanded=True):
-                st.markdown("""
-                **Start with these columns:**
 
-                | Column | Meaning | Practical interpretation |
-                |---|---|---|
-                | **classification** | Overall class from motif features | **AKAP** is strongest; **ambiguous** needs caution; **DDIP** may bind D/D-like domains but is not a strong PKA-anchor call; **unlikely** is low priority. |
-                | **isoform** | Predicted PKA regulatory subunit preference | **RII** = PKA-RII-like motif; **RI** = PKA-RI-like motif. |
-                | **pssm_score** | Similarity to known AKAP motifs | Higher is stronger. Use it to rank hits within the same isoform. |
-                | **ml_prob** | Machine-learning confidence, if model is available | Closer to 1.0 is stronger; around 0.5 is moderate; below 0.5 is weaker. |
-                | **n_negdet** | Number of acidic residues disrupting hydrophobic anchor positions | 0 is best. More negative determinants reduce confidence. |
-                | **core/window** | Predicted motif sequence | Use these sequences for alignment, mutation design, or peptide validation. |
-
-                **Important:** A predicted hit means “candidate AKAP-like motif”, not confirmed binding. Strong candidates should be checked by literature, structure/secondary-structure prediction, conservation, mutagenesis, peptide binding, or pull-down/PKA-localization assays.
-                """)
+            # Apply screening mode filter
+            if len(results) > 0 and screening_mode == "ML-prioritized proteomic confidence":
+                results = results[results.get("passes_proteomic_filter", pd.Series([False]*len(results))) == True].reset_index(drop=True)
 
             hit_proteins = set(results["protein"]) if len(results) > 0 else set()
             all_proteins = set(p[0] for p in proteins)
@@ -731,54 +653,47 @@ def main():
             # Summary metrics
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Proteins screened", len(proteins))
-            col2.metric("Proteins with AKAP", len(hit_proteins))
+            col2.metric("Proteins with hit", len(hit_proteins))
             col3.metric("Total motif hits", len(results))
             col4.metric("Time", f"{elapsed:.1f}s")
+
+            # Confidence tier summary
+            if len(results) > 0 and "proteomic_confidence" in results.columns:
+                conf_counts = results["proteomic_confidence"].value_counts()
+                tier_cols = st.columns(5)
+                for i, tier in enumerate(["very_high", "high", "sensitive_only", "unlikely"]):
+                    ct = conf_counts.get(tier, 0)
+                    tier_cols[i].metric(tier.replace("_", " ").title(), ct)
+                tier_cols[4].metric("Mode", screening_mode.split()[0])
 
             if len(results) > 0:
                 # ── Results table ──
                 st.subheader("🎯 Hit Table")
 
-                # Format for display
-                display_cols = ["protein", "isoform", "predicted_specificity", "ri_best", "rii_best",
-                                "ri_rii_ratio", "classification", "dual", "start", "end",
-                                "core", "pssm_score", "canonical", "amphipathic", "pI",
-                                "n_negdet", "negdet_severity", "helix_turns", "dd_class"]
-                if use_ml and _HAVE_ML:
-                    display_cols.insert(8, "ml_prob")
-                    display_cols.extend(["hydro_moment", "fft_amphi"])
+                # Format for display — proteomic confidence first
+                display_cols = ["protein", "proteomic_confidence", "isoform", "classification",
+                                "dual", "start", "end", "core", "pssm_score",
+                                "ml_prob", "ml_confidence_tier", "passes_ml_filter",
+                                "length_adjusted_score", "background_risk",
+                                "amphipathic", "pI", "n_negdet", "helix_turns", "dd_class",
+                                "filter_reason"]
 
-                # Color-code classification
                 st.dataframe(
                     results[[c for c in display_cols if c in results.columns]],
                     use_container_width=True,
                     column_config={
-                        "predicted_specificity": st.column_config.TextColumn(
-                            "Specificity",
-                            help="Protein-level RI/RII preference from full-sequence best RI and RII PSSM scores. Example: SPHKAP should be RI-specific even if a weak RII-like window crosses threshold."),
-                        "ri_best": st.column_config.NumberColumn(
-                            "Best RI", format="%.2f",
-                            help="Best RI PSSM score found anywhere in the full protein sequence."),
-                        "rii_best": st.column_config.NumberColumn(
-                            "Best RII", format="%.2f",
-                            help="Best RII PSSM score found anywhere in the full protein sequence."),
-                        "ri_rii_ratio": st.column_config.NumberColumn(
-                            "RI/RII", format="%.2f",
-                            help="Ratio of best RI score to best RII score. Higher values indicate RI preference; low values indicate RII preference."),
-                        "pssm_score": st.column_config.NumberColumn("PSSM Score", format="%.2f",
-                            help="Similarity to known AKAP motifs. Higher = more AKAP-like. Rank RII and RI hits separately."),
-                        "ml_prob": st.column_config.ProgressColumn("ML Prob", min_value=0, max_value=1, format="%.3f",
-                            help="Machine-learning confidence. Values near 1.0 are stronger; around 0.5 is moderate."),
-                        "pI": st.column_config.NumberColumn("pI", format="%.2f",
-                            help="Isoelectric point of the predicted motif core. This is annotation, not a pass/fail criterion."),
-                        "helix_turns": st.column_config.NumberColumn("Helix Turns", format="%.1f",
-                            help="Approximate number of hydrophobic-face helical turns. Longer continuous hydrophobic face supports AKAP-like binding."),
-                        "dual": st.column_config.CheckboxColumn("Dual",
-                            help="True if RI-like and RII-like hits overlap in the same protein region."),
-                        "canonical": st.column_config.CheckboxColumn("Canonical",
-                            help="True if the motif also matches the strict consensus pattern. False does not automatically mean invalid."),
-                        "amphipathic": st.column_config.CheckboxColumn("Amphipathic",
-                            help="True if the sequence has a plausible amphipathic helix pattern."),
+                        "pssm_score": st.column_config.NumberColumn("PSSM Score", format="%.2f"),
+                        "ml_prob": st.column_config.ProgressColumn("ML Prob", min_value=0, max_value=1, format="%.3f"),
+                        "pI": st.column_config.NumberColumn("pI", format="%.2f"),
+                        "helix_turns": st.column_config.NumberColumn("Helix Turns", format="%.1f"),
+                        "length_adjusted_score": st.column_config.NumberColumn("Len-adjusted", format="%.2f"),
+                        "passes_ml_filter": st.column_config.CheckboxColumn("ML Pass"),
+                        "background_risk": st.column_config.TextColumn("Background Risk"),
+                        "ml_confidence_tier": st.column_config.TextColumn("ML Tier"),
+                        "dual": st.column_config.CheckboxColumn("Dual"),
+                        "amphipathic": st.column_config.CheckboxColumn("Amphipathic"),
+                        "proteomic_confidence": st.column_config.TextColumn("Confidence",
+                            help="very_high/high = proteomic-grade, sensitive_only = candidate, unlikely = FP"),
                         "classification": st.column_config.TextColumn("Class",
                             help="AKAP=strong PKA anchor, DDIP=D/D domain interactor (no PKA), "
                                  "unlikely=charged residue disrupts hydrophobic face"),
@@ -799,7 +714,6 @@ def main():
 
                 # ── Per-protein detail view ──
                 st.subheader("🔬 Detailed View")
-                st.caption("The protein map shows where the predicted motif is located. The helical wheel helps you see whether hydrophobic residues cluster on one face of the helix, which is expected for AKAP motifs.")
                 sel_protein = st.selectbox("Select protein:", sorted(hit_proteins))
                 sel_hits = results[results["protein"] == sel_protein]
                 sel_seq = dict(proteins)[sel_protein]
@@ -815,7 +729,7 @@ def main():
                     with st.expander(
                         f"**{hit['isoform']}** @ {hit['start']}–{hit['end']}  |  "
                         f"PSSM={hit['pssm_score']:.1f}"
-                        + (f"  |  ML={hit['ml_prob']:.3f}" if hit.get('ml_prob') else ""),
+                        + (f"  |  ML={hit['ml_prob']:.3f}" if pd.notna(hit.get('ml_prob', None)) else ""),
                         expanded=(idx == 0),
                     ):
                         core_seq = hit["core"]
@@ -843,14 +757,13 @@ def main():
                         )
 
                         # Details
-                        detail_cols = st.columns(7)
+                        detail_cols = st.columns(6)
                         detail_cols[0].metric("Classification", hit.get("classification", "—"))
                         detail_cols[1].metric("pI", f"{hit['pI']:.2f}")
                         detail_cols[2].metric("Helix turns", f"{hit.get('helix_turns', 0):.1f}")
                         detail_cols[3].metric("Neg. determinants", hit.get("n_negdet", 0))
                         detail_cols[4].metric("Canonical", "✅" if hit["canonical"] else "❌")
                         detail_cols[5].metric("d/d class", hit.get("dd_class", "—"))
-                        detail_cols[6].metric("Specificity", hit.get("predicted_specificity", "—"))
 
                 # ── Score distribution ──
                 if len(results) > 3:
@@ -867,7 +780,6 @@ def main():
             # ── Proteins without hits ──
             if no_hit:
                 st.subheader("❌ Proteins without AKAP motifs")
-                st.info("No hit means no motif passed the current thresholds. It does not prove the protein can never interact with PKA; try default thresholds, check sequence correctness, or inspect known splice isoforms.")
                 for p in sorted(no_hit):
                     st.write(f"  • {p}")
 
@@ -875,11 +787,10 @@ def main():
     st.divider()
     st.markdown("""
     <div style="text-align:center; color:#888; font-size:0.85em;">
-    AKAP Domain Screener • PSSM + ML pipeline •
-    Based on <a href="https://doi.org/10.1021/bi500721a">Burgers et al. (2015)</a> •
-    PSSM from 849 RIIα + 28 RIα motifs
-    <br>
-    🧬 AKAP Domain Screener — kowith@ccs.tsukuba.ac.jp
+    🧬 AKAP Domain Screener — kowith@ccs.tsukuba.ac.jp<br>
+    PSSM + ML + DDIP/AKAP classification pipeline •
+    <a href="https://doi.org/10.1021/bi500721a">Burgers et al. 2015</a> •
+    <a href="https://doi.org/10.1042/BCJ20253085">Falcone & Scott 2025</a>
     </div>
     """, unsafe_allow_html=True)
 

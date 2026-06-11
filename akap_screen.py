@@ -358,11 +358,9 @@ def predict_specificity(seq, pssm):
     # Determine specificity from ratio
     if ri_best is not None and rii_best is not None and rii_best > 0:
         ratio = ri_best / rii_best
-        # A ratio near 2.0 already indicates strong RI preference.
-        # This keeps known RI-selective SPHKAP (RI/RII ≈ 2.46) as RI-specific.
-        if ratio >= 2.0:
+        if ratio >= 2.5:
             spec = "RI-specific"
-        elif ratio >= 1.3:
+        elif ratio >= 1.5:
             spec = "RI-leaning"
         elif ratio <= 0.5:
             spec = "RII-specific"
@@ -382,6 +380,284 @@ def predict_specificity(seq, pssm):
         rii_best=round(rii_best, 2) if rii_best is not None else None,
         ri_rii_ratio=round(ri_best / rii_best, 2) if (ri_best and rii_best and rii_best > 0) else None,
         predicted_specificity=spec,
+    )
+
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ML model loading and scoring
+# ═════════════════════════════════════════════════════════════════════════════
+_ML_BUNDLE = None     # loaded lazily
+_ML_MODEL_NAME = ""
+
+def load_ml_model(path=None):
+    """Load ML model bundle. Returns dict {iso: {model, scaler, feat_names}} or None."""
+    global _ML_BUNDLE, _ML_MODEL_NAME
+    if _ML_BUNDLE is not None:
+        return _ML_BUNDLE
+    try:
+        import joblib
+    except ImportError:
+        return None
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = []
+    if path:
+        candidates.append(path)
+    candidates += [
+        os.path.join(here, "akap_ml_model_v2.joblib"),
+        os.path.join(here, "akap_ml_model.joblib"),
+        "akap_ml_model_v2.joblib",
+        "akap_ml_model.joblib",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            _ML_BUNDLE = joblib.load(p)
+            _ML_MODEL_NAME = os.path.basename(p)
+            return _ML_BUNDLE
+    return None
+
+
+def score_hit_ml(window, iso, ml_bundle, pssm_mat):
+    """
+    Score a single window with the ML model.
+    Returns (probability, feature_dict) or (None, None) if ML unavailable.
+    """
+    if ml_bundle is None or iso not in ml_bundle:
+        return None, None
+    try:
+        # Import feature extraction from akap_ml
+        from akap_ml import extract_features
+        import numpy as np
+        feats = extract_features(window, iso, pssm_mat)
+        feat_names = ml_bundle[iso]["feat_names"]
+        X = np.array([[feats[k] for k in feat_names]])
+        X_scaled = ml_bundle[iso]["scaler"].transform(X)
+        prob = float(ml_bundle[iso]["model"].predict_proba(X_scaled)[0, 1])
+        return prob, feats
+    except Exception as e:
+        return None, None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Length-aware correction
+# ═════════════════════════════════════════════════════════════════════════════
+import math as _math
+
+def compute_length_correction(protein_length, pssm_score, iso):
+    """
+    Account for longer proteins having more random chances to produce
+    high PSSM windows. Returns dict with length-correction fields.
+
+    Model: under the null (random sequence), the probability of seeing
+    at least one window >= score in n_windows independent trials follows:
+      P(max >= s | n) ≈ 1 - (1 - p_single)^n
+    where p_single is estimated from the PSSM null distribution.
+    """
+    win_len = RII_LEN if iso == "RII" else RI_LEN
+    n_windows = max(1, protein_length - win_len + 1)
+
+    # Empirical null: from calibration, shuffled sequences give
+    # approximately exponential tail for PSSM scores.
+    # RII: mean_null ≈ -14, P(score >= s) ≈ exp(-(s - mu)/tau)
+    # Fitted from the 849-motif null distribution:
+    if iso == "RII":
+        mu, tau = -14.4, 3.5    # from calibration data
+    else:
+        mu, tau = -9.7, 3.0
+
+    # P(single window >= score)
+    p_single = _math.exp(-(pssm_score - mu) / tau) if pssm_score > mu else 1.0
+    p_single = min(p_single, 1.0)
+
+    # P(at least one hit in n_windows)
+    if n_windows * p_single < 0.01:
+        p_protein = n_windows * p_single   # Poisson approx
+    else:
+        p_protein = 1.0 - (1.0 - p_single) ** n_windows
+
+    # Length-adjusted score: -log10(p_protein)
+    if p_protein > 0:
+        length_adjusted_score = -_math.log10(max(p_protein, 1e-300))
+    else:
+        length_adjusted_score = 300.0
+
+    # Background risk categories
+    if p_protein < 0.001:
+        bg_risk = "low"
+    elif p_protein < 0.01:
+        bg_risk = "moderate"
+    elif p_protein < 0.05:
+        bg_risk = "elevated"
+    else:
+        bg_risk = "high"
+
+    return dict(
+        protein_length=protein_length,
+        n_windows_tested=n_windows,
+        length_adjusted_score=round(length_adjusted_score, 2),
+        background_risk=bg_risk,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Proteomic confidence tiers (v2 — fixed logic)
+# ═════════════════════════════════════════════════════════════════════════════
+# Key fix: ml_prob=None does NOT pass ML. It triggers a rule-only fallback
+# that is clearly marked. Biological red flags always block high confidence.
+
+# ── Isoform-specific PSSM thresholds for the HIGH-confidence gate ──
+# (Calibrated on the synthetic 10k benchmark; see tune_confidence_thresholds.py.)
+# RI helices score systematically higher than RII helices, but the grid search
+# found 12.0 optimal for BOTH as the *base* high gate: lowering the RII base
+# threshold below 12 raised random-background false positives more than it
+# raised RII recovery. The RII recovery is restored instead by the background
+# behaviour fix below, not by lowering this threshold.
+RII_PSSM_HIGH_THR = 12.0
+RI_PSSM_HIGH_THR  = 12.0
+PSSM_HIGH_THR     = 12.0          # kept for backward-compatible references
+
+ML_HIGH_THR    = 0.80     # ML gate for HIGH under low/moderate background risk
+ML_VHIGH_THR   = 0.90     # ML gate for VERY_HIGH (low/moderate background only)
+ML_MEDIUM_THR  = 0.60
+
+# ── Background-risk behaviour (the core v5.1 fix) ──
+# background_risk in {elevated, high} no longer HARD-BLOCKS a hit. Instead it
+# DOWNGRADES it: a strong hit can still be 'high' (never 'very_high'), but only
+# if it clears a STRICTER ML gate and a raised PSSM floor, to compensate for the
+# many windows a long protein presents under the null. This recovers true
+# RII-like positives (embedded in long proteins → high background) while keeping
+# random/shuffled/DDIP backgrounds out of the high-confidence tier.
+ML_HIGH_BG_THR     = 0.95   # stricter ML gate required under elevated/high bg
+HIGH_BG_PSSM_BONUS = 2.0    # raise PSSM floor by this much under elevated/high bg
+
+_PSSM_AMPHI_OVERRIDE = 6.0  # very high PSSM can substitute for the amphipathic flag
+
+
+def _iso_high_thr(iso):
+    return RII_PSSM_HIGH_THR if iso == "RII" else RI_PSSM_HIGH_THR
+
+
+def assign_proteomic_confidence(hit, ml_prob=None, background_risk="low"):
+    """
+    Assign proteomic confidence tier to a screening hit.
+
+    5-tier system:
+      very_high : strong evidence AND low/moderate background risk AND ML≥0.90
+      high      : strong evidence; reachable under HIGH background risk too, but
+                  only via a stricter ML gate (≥0.95) and a raised PSSM floor
+      medium    : AKAP-like with moderate ML support, or strong-but-not-strict
+                  enough under high background risk
+      sensitive_only : PSSM-positive but weak/missing ML or incomplete biology
+      unlikely  : severe negative determinants / 'unlikely' classification
+
+    v5.1 change vs v5
+    -----------------
+    Previously `high` (and `very_high`) both REQUIRED background_risk in
+    {low, moderate}; any 'elevated'/'high' background hit could not exceed
+    'medium'. Because genuine motifs embedded in long proteins almost always
+    fall in 'high' background risk, this silently capped true RII-like positives
+    at 'medium'. Now high background risk DOWNGRADES (very_high → high) rather
+    than blocking, gated by a stricter ML threshold so false positives stay out.
+
+    Key invariant kept from v1/v5: ml_prob=None does NOT count as passing ML.
+    ML never overrides a severe biological red flag (negdets / unlikely class).
+    """
+    classification = hit.get("classification", "ambiguous")
+    n_negdet       = hit.get("n_negdet", 0)
+    amphipathic    = hit.get("amphipathic", False)
+    pssm           = hit.get("pssm_score", 0)
+    iso            = hit.get("iso", hit.get("isoform", "RII"))
+
+    iso_thr      = _iso_high_thr(iso)
+    ml_available = ml_prob is not None
+
+    # ── Unlikely: severe biological red flags (ML cannot override these) ──
+    if classification == "unlikely" or n_negdet >= 2:
+        return _conf("unlikely", False, False, False,
+                     f"biological red flag: classification={classification}, n_negdet={n_negdet}",
+                     ml_prob, "unlikely")
+
+    if n_negdet == 1 and pssm < iso_thr:
+        return _conf("unlikely", True, False, False,
+                     f"negdet=1 with low pssm={pssm}<{iso_thr}", ml_prob, "unlikely")
+
+    # ── Base requirements for any high-confidence call ──
+    bio_ok   = (classification == "AKAP" and n_negdet == 0)
+    amphi_ok = amphipathic or pssm >= (iso_thr + _PSSM_AMPHI_OVERRIDE)
+    pssm_ok  = pssm >= iso_thr
+
+    bg_low_mod = background_risk in ("low", "moderate")
+    bg_high    = background_risk in ("elevated", "high")
+
+    strong = bio_ok and amphi_ok and pssm_ok
+
+    if strong and bg_low_mod:
+        # ── Very high (only under low/moderate background risk) ──
+        if ml_available and ml_prob >= ML_VHIGH_THR:
+            return _conf("very_high", True, True, True,
+                         f"AKAP {iso}, pssm={pssm}≥{iso_thr}, ml={ml_prob:.3f}≥{ML_VHIGH_THR}, "
+                         f"bg={background_risk}", ml_prob, "very_high")
+        # ── High ──
+        if ml_available and ml_prob >= ML_HIGH_THR:
+            return _conf("high", True, True, False,
+                         f"AKAP {iso}, pssm={pssm}≥{iso_thr}, ml={ml_prob:.3f}≥{ML_HIGH_THR}, "
+                         f"bg={background_risk}", ml_prob, "high")
+        # ── High (rule-only fallback when ML unavailable) ──
+        if not ml_available:
+            return _conf("high", True, True, False,
+                         f"rule-only fallback (ML unavailable); AKAP {iso}, pssm={pssm}≥{iso_thr}, "
+                         f"bg={background_risk}", ml_prob, "ml_missing")
+
+    elif strong and bg_high:
+        # ── High under high background risk: DOWNGRADE, not block ──
+        # Requires stricter ML evidence and a raised PSSM floor; never very_high.
+        pssm_floor_bg = iso_thr + HIGH_BG_PSSM_BONUS
+        if ml_available and ml_prob >= ML_HIGH_BG_THR and pssm >= pssm_floor_bg:
+            return _conf("high", True, True, False,
+                         f"AKAP {iso} under high bg downgrade: pssm={pssm}≥{pssm_floor_bg}, "
+                         f"ml={ml_prob:.3f}≥{ML_HIGH_BG_THR}, bg={background_risk}",
+                         ml_prob, "high")
+        # Strong but not strict enough under high background → medium
+        if ml_available and ml_prob >= ML_HIGH_THR:
+            return _conf("medium", True, False, False,
+                         f"strong but high bg: pssm={pssm}, ml={ml_prob:.3f}, "
+                         f"need ml≥{ML_HIGH_BG_THR} & pssm≥{pssm_floor_bg} for high; bg={background_risk}",
+                         ml_prob, "medium")
+
+    # ── Medium (AKAP-like with moderate ML support) ──
+    if ml_available and ml_prob >= ML_MEDIUM_THR:
+        return _conf("medium", True, False, False,
+                     f"ML moderate: ml={ml_prob:.3f}, pssm={pssm}, class={classification}, "
+                     f"bg={background_risk}", ml_prob, "medium")
+
+    # ── Sensitive only ──
+    fail_reasons = []
+    if not bio_ok:
+        fail_reasons.append(f"class={classification}/negdet={n_negdet}")
+    if not pssm_ok:
+        fail_reasons.append(f"pssm={pssm}<{iso_thr}")
+    if ml_available and ml_prob < ML_MEDIUM_THR:
+        fail_reasons.append(f"ml={ml_prob:.3f}<{ML_MEDIUM_THR}")
+    if not ml_available:
+        fail_reasons.append("ML unavailable")
+    if bg_high:
+        fail_reasons.append(f"bg_risk={background_risk}")
+    return _conf("sensitive_only", True, False, False,
+                 "sensitive_only: " + ", ".join(fail_reasons),
+                 ml_prob, "ml_missing" if not ml_available else "sensitive_only")
+
+
+def _conf(tier, sens, proto, vhigh, reason, ml_prob, ml_tier):
+    return dict(
+        proteomic_confidence=tier,
+        passes_sensitive_filter=sens,
+        passes_proteomic_filter=proto,
+        passes_very_high_filter=vhigh,
+        filter_reason=reason,
+        ml_prob=round(ml_prob, 4) if ml_prob is not None else None,
+        ml_confidence_tier=ml_tier,
+        ml_model_name=_ML_MODEL_NAME,
+        passes_ml_filter=(ml_prob is not None and ml_prob >= ML_HIGH_THR),
     )
 
 
@@ -409,90 +685,170 @@ def scan_isoform(seq, iso, pssm, threshold, strict=False):
                          pssm_score=round(sc, 2), canonical=canon,
                          pI=isoelectric_point(core), helix_approx=helix_propensity(core),
                          amphipathic=_amphipathic_ok(core, iso),
-                         # DDIP / negative determinant analysis
                          **detect_negative_determinants(core, iso),
                          **score_helix_extent(win, iso),
                          dd_class=predict_dd_class(core, iso),
                          ))
-    # Add classification after all hits collected
     for h in hits:
         h["classification"] = classify_ddip_vs_akap(h)
     return hits
 
 
-# -----------------------------------------------------------------------------
-def screen_protein(pid, seq, args, pssm):
+# ═════════════════════════════════════════════════════════════════════════════
+# Full output fields
+# ═════════════════════════════════════════════════════════════════════════════
+OUTPUT_FIELDS = [
+    "protein", "isoform", "dual", "win_start", "win_end", "core", "window",
+    "pssm_score", "canonical", "amphipathic", "pI", "helix_approx",
+    "classification", "n_negdet", "negdet_severity",
+    "contiguous_hydro_turns", "akap_helix_sufficient", "ddip_range", "dd_class",
+    "predicted_specificity", "ri_best", "rii_best", "ri_rii_ratio",
+    # ML columns
+    "ml_model_name", "ml_prob", "ml_confidence_tier", "passes_ml_filter",
+    # Length correction
+    "protein_length", "n_windows_tested", "length_adjusted_score", "background_risk",
+    # Proteomic confidence
+    "proteomic_confidence", "passes_sensitive_filter", "passes_proteomic_filter",
+    "passes_very_high_filter", "filter_reason",
+]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# screen_protein (v2 — with ML + length correction)
+# ═════════════════════════════════════════════════════════════════════════════
+def screen_protein(pid, seq, args, pssm, ml_bundle=None):
     hits = []
     if not args.ri_only:
         hits += scan_isoform(seq, "RII", pssm, args.rii_thr, args.strict)
     if not args.rii_only:
         hits += scan_isoform(seq, "RI", pssm, args.ri_thr, args.strict)
 
-    # Protein-level RI/RII specificity, evaluated across the full sequence.
-    # This prevents interpreting every threshold-crossing RII window as true RII specificity
-    # when the full-length protein is strongly RI-preferred, as in SPHKAP.
-    spec = predict_specificity(seq, pssm)
-
+    # Dual flag
     for a in hits:
         a["dual"] = any(b["iso"] != a["iso"] and
                         not (a["win_end"] < b["win_start"] or b["win_end"] < a["win_start"])
                         for b in hits)
-    return [dict(protein=pid, isoform=h["iso"], dual=h["dual"],
-                 win_start=h["win_start"], win_end=h["win_end"],
-                 core=h["core"], window=h["window"], pssm_score=h["pssm_score"],
-                 canonical=h["canonical"], amphipathic=h["amphipathic"],
-                 pI=h["pI"], helix_approx=h["helix_approx"],
-                 classification=h["classification"],
-                 n_negdet=h["n_negdet"], negdet_severity=h["negdet_severity"],
-                 contiguous_hydro_turns=h["contiguous_hydro_turns"],
-                 akap_helix_sufficient=h["akap_helix_sufficient"],
-                 ddip_range=h["ddip_range"], dd_class=h["dd_class"],
-                 predicted_specificity=spec["predicted_specificity"],
-                 ri_best=spec["ri_best"], rii_best=spec["rii_best"],
-                 ri_rii_ratio=spec["ri_rii_ratio"],
-                 ) for h in hits]
+
+    # Per-protein specificity
+    spec = predict_specificity(seq, pssm)
+    prot_len = len(seq)
+
+    rows = []
+    for h in hits:
+        iso = h["iso"]
+
+        # ML scoring
+        ml_p = None
+        if ml_bundle is not None:
+            ml_p, _ = score_hit_ml(h["window"], iso, ml_bundle, pssm[iso]["pssm"])
+
+        # Length correction
+        lc = compute_length_correction(prot_len, h["pssm_score"], iso)
+
+        # Proteomic confidence
+        conf = assign_proteomic_confidence(h, ml_prob=ml_p,
+                                           background_risk=lc["background_risk"])
+
+        row = dict(
+            protein=pid, isoform=iso, dual=h["dual"],
+            win_start=h["win_start"], win_end=h["win_end"],
+            core=h["core"], window=h["window"],
+            pssm_score=h["pssm_score"], canonical=h["canonical"],
+            amphipathic=h["amphipathic"], pI=h["pI"], helix_approx=h["helix_approx"],
+            classification=h["classification"],
+            n_negdet=h["n_negdet"], negdet_severity=h["negdet_severity"],
+            contiguous_hydro_turns=h["contiguous_hydro_turns"],
+            akap_helix_sufficient=h["akap_helix_sufficient"],
+            ddip_range=h["ddip_range"], dd_class=h["dd_class"],
+            # Specificity
+            predicted_specificity=spec["predicted_specificity"],
+            ri_best=spec["ri_best"], rii_best=spec["rii_best"],
+            ri_rii_ratio=spec["ri_rii_ratio"],
+            # ML
+            **{k: conf[k] for k in ("ml_model_name", "ml_prob",
+                                      "ml_confidence_tier", "passes_ml_filter")},
+            # Length correction
+            **lc,
+            # Confidence
+            **{k: conf[k] for k in ("proteomic_confidence", "passes_sensitive_filter",
+                                      "passes_proteomic_filter", "passes_very_high_filter",
+                                      "filter_reason")},
+        )
+        rows.append(row)
+    return rows
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# CLI
+# ═════════════════════════════════════════════════════════════════════════════
 def main():
     ap = argparse.ArgumentParser(
-        description="Screen a protein FASTA for AKAP (PKA-R binding) amphipathic-helix motifs.")
+        description="AKAPSpred: screen proteins for AKAP amphipathic-helix motifs.")
     ap.add_argument("fasta", nargs="?", help="input FASTA ('-' for stdin)")
     ap.add_argument("-o", "--out", help="output CSV (default: stdout)")
-    ap.add_argument("--rii-only", action="store_true", help="screen only the PKA-RII motif")
-    ap.add_argument("--ri-only", action="store_true", help="screen only the PKA-RI motif")
+    ap.add_argument("--rii-only", action="store_true")
+    ap.add_argument("--ri-only", action="store_true")
     ap.add_argument("--rii-thr", type=float, default=DEFAULT_RII_THR,
                     help=f"PKA-RII PSSM threshold (default {DEFAULT_RII_THR})")
     ap.add_argument("--ri-thr", type=float, default=DEFAULT_RI_THR,
                     help=f"PKA-RI PSSM threshold (default {DEFAULT_RI_THR})")
     ap.add_argument("--strict", action="store_true",
-                    help="additionally require the literal consensus regex (lower recall)")
-    ap.add_argument("--selftest", action="store_true",
-                    help="run on the paper's validated AKAP peptides and exit")
+                    help="require literal consensus regex")
+    # ML options
+    ap.add_argument("--use-ml", action="store_true",
+                    help="load and use ML model for each PSSM hit")
+    ap.add_argument("--ml-model", default=None,
+                    help="path to ML model .joblib file")
+    ap.add_argument("--ml-high", type=float, default=ML_HIGH_THR,
+                    help=f"ML prob threshold for 'high' (default {ML_HIGH_THR})")
+    ap.add_argument("--ml-vhigh", type=float, default=ML_VHIGH_THR,
+                    help=f"ML prob threshold for 'very_high' (default {ML_VHIGH_THR})")
+    ap.add_argument("--ml-required", action="store_true",
+                    help="drop hits where ML is unavailable")
+    # Filtering
+    ap.add_argument("--proteomic", action="store_true",
+                    help="output only proteomic high-confidence hits")
+    ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
+    # Apply custom ML thresholds
+
     pssm = load_pssm()
+
     if args.selftest:
         run_selftest(args, pssm)
         return
+
     if not args.fasta:
-        ap.error("provide a FASTA file (or '-' for stdin), or use --selftest")
+        ap.error("provide a FASTA file or use --selftest")
+
+    # Load ML
+    ml_bundle = None
+    if args.use_ml:
+        ml_bundle = load_ml_model(args.ml_model)
+        if ml_bundle is None:
+            sys.stderr.write("[warn] --use-ml specified but no ML model found. "
+                             "Falling back to rule-only.\n")
+        else:
+            sys.stderr.write(f"[info] ML model loaded: {_ML_MODEL_NAME}\n")
 
     rows, n_prot = [], 0
     for pid, seq in read_fasta(args.fasta):
         n_prot += 1
-        rows += screen_protein(pid, seq, args, pssm)
+        rows += screen_protein(pid, seq, args, pssm, ml_bundle)
     rows.sort(key=lambda r: -r["pssm_score"])
 
-    fields = ["protein","isoform","dual","win_start","win_end","core","window",
-              "pssm_score","canonical","amphipathic","pI","helix_approx",
-              "classification","n_negdet","negdet_severity",
-              "contiguous_hydro_turns","akap_helix_sufficient","ddip_range","dd_class",
-              "predicted_specificity","ri_best","rii_best","ri_rii_ratio"]
+    # Apply filters
+    if args.ml_required:
+        rows = [r for r in rows if r.get("ml_prob") is not None]
+    if args.proteomic:
+        rows = [r for r in rows if r["passes_proteomic_filter"]]
+
     out = open(args.out, "w", newline="") if args.out else sys.stdout
-    w = csv.DictWriter(out, fieldnames=fields)
+    w = csv.DictWriter(out, fieldnames=OUTPUT_FIELDS)
     w.writeheader()
     for r in rows:
-        w.writerow(r)
+        w.writerow({k: r.get(k, "") for k in OUTPUT_FIELDS})
     if args.out:
         out.close()
         hitp = len({r["protein"] for r in rows})
@@ -501,33 +857,34 @@ def main():
 
 
 def run_selftest(args, pssm):
+    ml_bundle = load_ml_model(args.ml_model if hasattr(args, 'ml_model') else None)
+    ml_tag = f"ML={_ML_MODEL_NAME}" if ml_bundle else "ML=none"
     peptides = {
-        "AKAP7g_294-317(strongRII)": "AELVRLSKRLVENAVLKAVQQYLE",
-        "AKAP10_629-652(dual)":      "EAQEELAWKIAKMIVSDIMQQAQY",
-        "Ezrin_84-107(dual)":        "RAKFYPEDVAEELIQDITQKLFFLQVKEGI",
-        "vlAKAP_1299-1322(RII)":     "CLLEDKARELVNEIIYVAQEKLRN",
-        "smAKAP_56-79(RI)":          "GTNTVILEYAHRLSQDILCDALQQWACNNI",
-        "SPHKAP_920-949(RI)":        "PDIYCITDFAEELADTVVSMATEIAAICLD",
-        "OPA1_human(AKAP)":          "KKVRE IQEKLD AFIEALH".replace(" ",""),
-        "OPA1_fungal(nonAKAP)":      "EALVAERDRVKALLDAYK",
-        "negative_control":          "MKWVTFISLLLLFSSAYSRGVFRRDTHKSE",
+        "AKAP7g(strongRII)":  "AELVRLSKRLVENAVLKAVQQYLE",
+        "AKAP10(dual)":       "EAQEELAWKIAKMIVSDIMQQAQY",
+        "Ezrin(dual)":        "RAKFYPEDVAEELIQDITQKLFFLQVKEGI",
+        "vlAKAP(RII)":        "CLLEDKARELVNEIIYVAQEKLRN",
+        "smAKAP(RI)":         "GTNTVILEYAHRLSQDILCDALQQWACNNI",
+        "SPHKAP(RI)":         "PDIYCITDFAEELADTVVSMATEIAAICLD",
+        "negative":           "MKWVTFISLLLLFSSAYSRGVFRRDTHKSE",
     }
-    print(f"self-test  (RII thr={args.rii_thr}, RI thr={args.ri_thr})\n")
+    print(f"self-test  ({ml_tag}, RII≥{args.rii_thr}, RI≥{args.ri_thr})")
+    print(f"Thresholds: high_ml≥{ML_HIGH_THR}, vhigh_ml≥{ML_VHIGH_THR}\n")
     for name, seq in peptides.items():
         rii = scan_isoform(seq, "RII", pssm, args.rii_thr, args.strict)
         ri  = scan_isoform(seq, "RI",  pssm, args.ri_thr,  args.strict)
+        all_h = rii + ri
         tag = "+".join([t for t, h in (("RII", rii), ("RI", ri)) if h]) or "no-call"
-        det = "; ".join(f"{h['iso']} {h['pssm_score']}"
-                        f"{'/canon' if h['canonical'] else ''}"
-                        f" [{h['classification']}|turns={h['contiguous_hydro_turns']}"
-                        f"|negdet={h['n_negdet']}]"
-                        for h in rii+ri)
-        # Specificity prediction
-        spec = predict_specificity(seq, pssm)
-        spec_tag = f"  spec={spec['predicted_specificity']}" if spec['predicted_specificity'] != 'undetermined' else ""
-        if spec['ri_rii_ratio']:
-            spec_tag += f" (RI/RII={spec['ri_rii_ratio']})"
-        print(f"  {name:27s} -> {tag:7s}  {det}{spec_tag}")
+        parts = []
+        for h in all_h:
+            ml_p = None
+            if ml_bundle:
+                ml_p, _ = score_hit_ml(h["window"], h["iso"], ml_bundle, pssm[h["iso"]]["pssm"])
+            lc = compute_length_correction(len(seq), h["pssm_score"], h["iso"])
+            conf = assign_proteomic_confidence(h, ml_prob=ml_p, background_risk=lc["background_risk"])
+            ml_s = f"ml={ml_p:.2f}" if ml_p is not None else "ml=n/a"
+            parts.append(f"{h['iso']} {h['pssm_score']} {ml_s} [{conf['proteomic_confidence']}]")
+        print(f"  {name:20s} -> {tag:7s}  {'; '.join(parts)}")
 
 
 if __name__ == "__main__":
