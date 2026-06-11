@@ -261,6 +261,79 @@ def run_screen(proteins, rii_thr, ri_thr, use_ml, ml_thr, strict):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# UX helpers for concise hit table
+# ═════════════════════════════════════════════════════════════════════════════
+def _confidence_label(conf):
+    """Human-readable confidence badge for the main hit table."""
+    conf = str(conf or "").lower()
+    return {
+        "very_high": "🟣 Very high",
+        "high": "🟢 High",
+        "sensitive_only": "🟡 Candidate",
+        "unlikely": "⚪ Unlikely",
+    }.get(conf, conf.replace("_", " " ).title() if conf else "—")
+
+
+def _priority_score(row):
+    """Simple UX-oriented rank: lower is better. Does not change screening logic."""
+    conf_rank = {"very_high": 0, "high": 1, "sensitive_only": 2, "unlikely": 4}
+    conf = str(row.get("proteomic_confidence", "")).lower()
+    score = conf_rank.get(conf, 3) * 100
+    if bool(row.get("canonical", False)):
+        score -= 8
+    if int(row.get("n_negdet", 0) or 0) == 0:
+        score -= 5
+    if bool(row.get("amphipathic", False)):
+        score -= 4
+    ml = row.get("ml_prob", None)
+    if ml is not None and pd.notna(ml):
+        score -= float(ml) * 10
+    score -= min(float(row.get("pssm_score", 0) or 0), 40) / 10
+    return score
+
+
+def _build_hit_table(results):
+    """Build a compact, readable hit table for biologists/users."""
+    if results is None or len(results) == 0:
+        return pd.DataFrame()
+    df = results.copy()
+    df["_priority_score"] = df.apply(_priority_score, axis=1)
+    df = df.sort_values(["_priority_score", "pssm_score"], ascending=[True, False]).reset_index(drop=True)
+
+    rows = []
+    for i, r in df.iterrows():
+        start = r.get("start", r.get("win_start", "?"))
+        end = r.get("end", r.get("win_end", "?"))
+        conf = str(r.get("proteomic_confidence", "")).lower()
+        if conf in ("very_high", "high") and bool(r.get("canonical", False)) and int(r.get("n_negdet", 0) or 0) == 0:
+            action = "Prioritize"
+        elif conf == "sensitive_only":
+            action = "Review"
+        elif conf == "unlikely":
+            action = "Low priority"
+        else:
+            action = "Check"
+        rows.append({
+            "#": i + 1,
+            "Priority": action,
+            "Confidence": _confidence_label(conf),
+            "Protein": r.get("protein", "—"),
+            "Region": f"{start}–{end}",
+            "Isoform": r.get("isoform", "—"),
+            "d/d class": r.get("dd_class", "—"),
+            "PSSM": r.get("pssm_score", None),
+            "ML": r.get("ml_prob", None),
+            "Canonical": bool(r.get("canonical", False)),
+            "NegDet": int(r.get("n_negdet", 0) or 0),
+            "Turns": r.get("helix_turns", r.get("contiguous_hydro_turns", None)),
+            "BG risk": r.get("background_risk", "—"),
+            "Core motif": r.get("core", ""),
+            "Reason": r.get("filter_reason", ""),
+        })
+    return pd.DataFrame(rows)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Visualization functions
 # ═════════════════════════════════════════════════════════════════════════════
 def plot_helical_wheel(seq, title="Helical Wheel"):
@@ -667,49 +740,103 @@ def main():
                 tier_cols[4].metric("Mode", screening_mode.split()[0])
 
             if len(results) > 0:
-                # ── Results table ──
+                # ── User-friendly results table ──
                 st.subheader("🎯 Hit Table")
+                st.caption(
+                    "A compact view for choosing which motifs to inspect first. "
+                    "Priority is a UX ranking only; the scientific calls come from the backend confidence logic."
+                )
 
-                # Format for display — proteomic confidence first
-                display_cols = ["protein", "proteomic_confidence", "isoform", "classification",
-                                "dual", "start", "end", "core", "pssm_score",
-                                "ml_prob", "ml_confidence_tier", "passes_ml_filter",
-                                "length_adjusted_score", "background_risk",
-                                "amphipathic", "pI", "n_negdet", "helix_turns", "dd_class",
-                                "filter_reason"]
+                with st.expander("How to read this table", expanded=False):
+                    st.markdown(
+                        """
+                        - **🟣 Very high / 🟢 High**: best candidates for follow-up.
+                        - **🟡 Candidate**: sensitive PSSM hit; inspect manually before claiming.
+                        - **Canonical ✅**: matches the stricter AKAP motif pattern.
+                        - **NegDet = 0**: no obvious D/E negative determinant in the checked anchor frame.
+                        - **ML**: ML v2 confidence/ranking score, not yet a fully calibrated biological probability.
+                        - **BG risk**: expected random-hit risk from protein length/window count.
+                        """
+                    )
+
+                ux_table = _build_hit_table(results)
+
+                # Quick filters for easier browsing in long proteins/proteomes.
+                f1, f2, f3, f4 = st.columns([1.2, 1.0, 1.0, 1.0])
+                with f1:
+                    conf_opts = list(ux_table["Confidence"].dropna().unique())
+                    selected_conf = st.multiselect("Confidence", conf_opts, default=conf_opts)
+                with f2:
+                    iso_opts = list(ux_table["Isoform"].dropna().unique())
+                    selected_iso = st.multiselect("Isoform", iso_opts, default=iso_opts)
+                with f3:
+                    canonical_only = st.checkbox("Canonical only", value=False)
+                with f4:
+                    clean_only = st.checkbox("NegDet = 0", value=False)
+
+                show_table = ux_table.copy()
+                if selected_conf:
+                    show_table = show_table[show_table["Confidence"].isin(selected_conf)]
+                if selected_iso:
+                    show_table = show_table[show_table["Isoform"].isin(selected_iso)]
+                if canonical_only:
+                    show_table = show_table[show_table["Canonical"] == True]
+                if clean_only:
+                    show_table = show_table[show_table["NegDet"] == 0]
 
                 st.dataframe(
-                    results[[c for c in display_cols if c in results.columns]],
+                    show_table,
                     use_container_width=True,
+                    hide_index=True,
                     column_config={
-                        "pssm_score": st.column_config.NumberColumn("PSSM Score", format="%.2f"),
-                        "ml_prob": st.column_config.ProgressColumn("ML Prob", min_value=0, max_value=1, format="%.3f"),
-                        "pI": st.column_config.NumberColumn("pI", format="%.2f"),
-                        "helix_turns": st.column_config.NumberColumn("Helix Turns", format="%.1f"),
-                        "length_adjusted_score": st.column_config.NumberColumn("Len-adjusted", format="%.2f"),
-                        "passes_ml_filter": st.column_config.CheckboxColumn("ML Pass"),
-                        "background_risk": st.column_config.TextColumn("Background Risk"),
-                        "ml_confidence_tier": st.column_config.TextColumn("ML Tier"),
-                        "dual": st.column_config.CheckboxColumn("Dual"),
-                        "amphipathic": st.column_config.CheckboxColumn("Amphipathic"),
-                        "proteomic_confidence": st.column_config.TextColumn("Confidence",
-                            help="very_high/high = proteomic-grade, sensitive_only = candidate, unlikely = FP"),
-                        "classification": st.column_config.TextColumn("Class",
-                            help="AKAP=strong PKA anchor, DDIP=D/D domain interactor (no PKA), "
-                                 "unlikely=charged residue disrupts hydrophobic face"),
-                        "n_negdet": st.column_config.NumberColumn("NegDet",
-                            help="Charged residues (D/E) at hydrophobic anchor positions — blocks PKA binding"),
-                        "negdet_severity": st.column_config.TextColumn("Severity"),
-                        "dd_class": st.column_config.TextColumn("d/d Class",
-                            help="Predicted d/d domain partner: RIID2 (PKA-RII), RID2 (PKA-RI), DPY-30"),
+                        "#": st.column_config.NumberColumn("#", width="small"),
+                        "Priority": st.column_config.TextColumn("Priority", help="UX ranking: Prioritize / Review / Low priority"),
+                        "Confidence": st.column_config.TextColumn("Confidence", help="Backend proteomic confidence tier"),
+                        "Region": st.column_config.TextColumn("Region", help="Residue start-end of the detected window"),
+                        "PSSM": st.column_config.NumberColumn("PSSM", format="%.2f", help="PSSM motif score"),
+                        "ML": st.column_config.ProgressColumn("ML", min_value=0, max_value=1, format="%.3f", help="ML v2 confidence/ranking score"),
+                        "Canonical": st.column_config.CheckboxColumn("Canonical", help="Strict canonical AKAP motif pattern"),
+                        "NegDet": st.column_config.NumberColumn("NegDet", help="Number of negative determinant residues detected"),
+                        "Turns": st.column_config.NumberColumn("Turns", format="%.1f", help="Approximate helical turns / hydrophobic-face support"),
+                        "BG risk": st.column_config.TextColumn("BG risk", help="Protein-length/background hit risk"),
+                        "Core motif": st.column_config.TextColumn("Core motif"),
+                        "Reason": st.column_config.TextColumn("Reason", help="Backend explanation of the confidence call"),
                     },
                 )
 
-                # Download button
-                csv_buf = results.to_csv(index=False)
+                csv_buf = show_table.to_csv(index=False)
                 st.download_button(
-                    "⬇️ Download results CSV", csv_buf, "akap_hits.csv", "text/csv",
+                    "⬇️ Download filtered Hit Table", csv_buf, "akap_hit_table_filtered.csv", "text/csv",
                     use_container_width=True,
+                )
+
+                with st.expander("🔧 Full technical table", expanded=False):
+                    display_cols = ["protein", "proteomic_confidence", "isoform", "classification",
+                                    "dual", "start", "end", "core", "window", "pssm_score", "canonical",
+                                    "ml_prob", "ml_confidence_tier", "passes_ml_filter",
+                                    "length_adjusted_score", "background_risk",
+                                    "amphipathic", "pI", "n_negdet", "helix_turns", "dd_class",
+                                    "filter_reason"]
+                    st.dataframe(
+                        results[[c for c in display_cols if c in results.columns]],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "pssm_score": st.column_config.NumberColumn("PSSM Score", format="%.2f"),
+                            "ml_prob": st.column_config.ProgressColumn("ML Prob", min_value=0, max_value=1, format="%.3f"),
+                            "pI": st.column_config.NumberColumn("pI", format="%.2f"),
+                            "helix_turns": st.column_config.NumberColumn("Helix Turns", format="%.1f"),
+                            "length_adjusted_score": st.column_config.NumberColumn("Len-adjusted", format="%.2f"),
+                            "passes_ml_filter": st.column_config.CheckboxColumn("ML Pass"),
+                            "canonical": st.column_config.CheckboxColumn("Canonical"),
+                            "amphipathic": st.column_config.CheckboxColumn("Amphipathic"),
+                            "dual": st.column_config.CheckboxColumn("Dual"),
+                        },
+                    )
+
+                st.download_button(
+                    "⬇️ Download full backend results CSV", results.to_csv(index=False),
+                    "akap_hits_full_backend.csv", "text/csv", use_container_width=True,
                 )
 
                 # ── Per-protein detail view ──
