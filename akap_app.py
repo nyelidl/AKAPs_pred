@@ -399,6 +399,14 @@ def main():
         initial_sidebar_state="expanded",
     )
 
+    # Persist UniProt-resolved proteins across Streamlit reruns.
+    # Without this, clicking "Run AKAP Screen" reruns the script and resets
+    # the local `proteins = []`, so nothing is screened after a successful fetch.
+    if "resolved_proteins" not in st.session_state:
+        st.session_state.resolved_proteins = []
+    if "resolved_queries" not in st.session_state:
+        st.session_state.resolved_queries = []
+
     # ── Header ──
     st.markdown("""
     # 🧬 AKAP Domain Screener
@@ -538,43 +546,73 @@ def main():
         with col_org2:
             reviewed_only = st.checkbox("Reviewed (Swiss-Prot) only", value=True)
 
+        c_search, c_clear = st.columns([3, 1])
+        with c_clear:
+            if st.button("Clear fetched proteins", use_container_width=True):
+                st.session_state.resolved_proteins = []
+                st.session_state.resolved_queries = []
+                st.rerun()
+
         if query_text.strip():
             queries = [q.strip() for q in query_text.strip().split("\n") if q.strip()]
 
-            if st.button(f"🔍 Search UniProt ({len(queries)} queries)", use_container_width=True):
+            with c_search:
+                do_search = st.button(
+                    f"🔍 Search UniProt ({len(queries)} queries)",
+                    use_container_width=True
+                )
+
+            if do_search:
+                # IMPORTANT: save results in session_state, because Streamlit reruns
+                # the whole script when the next button is clicked.
+                st.session_state.resolved_proteins = []
+                st.session_state.resolved_queries = queries
+
                 st.divider()
                 prog = st.progress(0)
 
-                # Store search results in session state for user selection
-                all_search_results = []
                 for idx, query in enumerate(queries):
                     st.markdown(f"**Searching: `{query}`**")
 
-                    # Check if it looks like a UniProt accession
+                    # Check if it looks like a UniProt accession, including isoform IDs.
                     is_accession = bool(
-                        re.match(r'^[OPQ][0-9][A-Z0-9]{3}[0-9]$', query) or
-                        re.match(r'^[A-NR-Z][0-9][A-Z][A-Z0-9]{2}[0-9]$', query)
+                        re.match(r'^[OPQ][0-9][A-Z0-9]{3}[0-9](?:-\d+)?$', query) or
+                        re.match(r'^[A-NR-Z][0-9][A-Z][A-Z0-9]{2}[0-9](?:-\d+)?$', query)
                     )
 
                     if is_accession:
                         seq, err = fetch_uniprot(query)
                         if seq:
-                            proteins.append((query, seq))
+                            st.session_state.resolved_proteins.append((query, seq))
                             st.success(f"  ✅ {query}: fetched ({len(seq)} aa)")
                         else:
                             st.warning(f"  ❌ {query}: {err}")
                     else:
                         org = "" if organism == "Any" else organism
-                        results, err = search_uniprot(query, organism=org,
-                                                       reviewed=reviewed_only, max_results=5)
-                        if err:
+                        results, err = search_uniprot(
+                            query, organism=org,
+                            reviewed=reviewed_only, max_results=5
+                        )
+
+                        # Fallback 1: same organism, but include unreviewed entries.
+                        if not results and reviewed_only:
+                            results, err = search_uniprot(
+                                query, organism=org,
+                                reviewed=False, max_results=5
+                            )
+
+                        # Fallback 2: any organism, unreviewed, useful for non-human names.
+                        if not results and org:
+                            results, err = search_uniprot(
+                                query, organism="",
+                                reviewed=False, max_results=5
+                            )
+
+                        if err and not results:
                             st.warning(f"  ❌ Search error: {err}")
-                        elif not results:
-                            # Retry without reviewed filter
-                            results, _ = search_uniprot(query, organism=org,
-                                                         reviewed=False, max_results=5)
+
                         if results:
-                            # Show results as a table for transparency
+                            # Show results as a table for transparency.
                             res_df = pd.DataFrame([
                                 {"": "✅" if i == 0 else "",
                                  "Accession": r["accession"],
@@ -586,23 +624,44 @@ def main():
                             ])
                             st.dataframe(res_df, use_container_width=True, hide_index=True)
 
-                            # Use top hit
+                            # Use top hit.
                             top = results[0]
                             display = top["gene"] or top["accession"]
-                            proteins.append((f'{display}_{top["accession"]}', top["sequence"]))
+                            st.session_state.resolved_proteins.append(
+                                (f'{display}_{top["accession"]}', top["sequence"])
+                            )
                             st.success(
                                 f"  → Using top hit: **{top['name'][:60]}** "
-                                f"({top['accession']}, {top['gene']}, {top['length']} aa)")
+                                f"({top['accession']}, {top['gene']}, {top['length']} aa)"
+                            )
                         else:
                             st.warning(f"  ❌ No UniProt results for '{query}'")
 
                     prog.progress((idx + 1) / len(queries))
                     time.sleep(0.3)  # Be polite to API
 
-                if proteins:
+                if st.session_state.resolved_proteins:
                     st.divider()
-                    st.success(f"✅ {len(proteins)} protein(s) ready for screening. "
-                              f"Click **Run AKAP Screen** below.")
+                    st.success(
+                        f"✅ {len(st.session_state.resolved_proteins)} protein(s) ready for screening. "
+                        f"Click **Run AKAP Screen** below."
+                    )
+
+        # Rehydrate the local variable on every rerun.
+        # This makes the downstream "Run AKAP Screen" button visible and functional
+        # after a successful UniProt fetch.
+        proteins = list(st.session_state.resolved_proteins)
+
+        if proteins:
+            with st.expander("Fetched proteins ready for screening", expanded=True):
+                st.dataframe(
+                    pd.DataFrame([
+                        {"Protein": name, "Length": len(seq)}
+                        for name, seq in proteins
+                    ]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     # ── Run screening ──
     if proteins:
