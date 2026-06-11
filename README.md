@@ -1,5 +1,8 @@
 # 🧬 AKAP Domain Screener
 
+### Web app (Streamlit)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://akapspred.streamlit.app/)
+
 Screen proteins for **A-Kinase Anchoring Protein (AKAP)** amphipathic-helix motifs that bind PKA regulatory subunits.
 
 Based on: **Burgers et al. (2015)** *"A Systematic Evaluation of Protein Kinase A–A-Kinase Anchoring Protein Interaction Motifs"*, Biochemistry 54, 11–21. [DOI: 10.1021/bi500721a](https://doi.org/10.1021/bi500721a)
@@ -27,33 +30,238 @@ An AKAP domain is a short amphipathic α-helix (3–4 turns) that docks its hydr
 
 ---
 
-## Beginner manual
+## Beginner guide for non-expert users
 
-For non-expert users, see **`USER_MANUAL.md`**. It explains:
+This section explains how to use the app and how to interpret the values in plain language. The screener is a prioritization tool: a predicted motif is a candidate for follow-up, not final proof of PKA binding.
 
-- Which input mode to use.
-- How to fetch proteins from UniProt.
-- What each result column means.
-- How to decide whether a hit is strong or weak.
-- What to do after getting predicted hits.
+## 1. What this tool does
 
-### Fast interpretation guide
+The AKAP Domain Screener searches protein sequences for short regions that look like **AKAP motifs**.
 
-| Result item | Good sign | Caution sign |
+An **AKAP motif** is usually a short amphipathic alpha helix. In simple terms, this means one side of the helix is hydrophobic and can dock onto the dimerization/docking domain of PKA regulatory subunits.
+
+The tool is useful for:
+
+- Finding possible AKAP-like motifs in a protein.
+- Comparing candidate motifs across many proteins.
+- Prioritizing motifs for experimental validation.
+- Deciding which short peptide regions may be worth testing.
+
+The tool is **not** final proof of PKA binding. It gives candidate regions that need biological interpretation and validation.
+
+---
+
+## 2. How to run the app
+
+Open a terminal in the folder containing the files and run:
+
+```bash
+pip install -r requirements.txt
+streamlit run akap_app.py
+```
+
+A browser window should open automatically.
+
+---
+
+## 3. Easiest use mode: search UniProt
+
+For most users, use **Search by protein name / UniProt ID**.
+
+### Steps
+
+1. Select **Search by protein name / UniProt ID**.
+2. Type one protein, gene name, or UniProt accession per line.
+
+Example:
+
+```text
+Ezrin
+AKAP10
+WAVE1
+P15311
+O43572
+```
+
+3. Choose organism, usually **Human**.
+4. Keep **Reviewed (Swiss-Prot) only** checked for cleaner results.
+5. Click **Search UniProt**.
+6. Check the fetched protein table.
+7. Click **Run AKAP Screen**.
+
+### Important note
+
+If you type a common protein name, UniProt may return several proteins. The app automatically uses the **top hit**. Before using results for a manuscript, check that the accession, organism, and sequence length are correct.
+
+---
+
+## 4. Other input modes
+
+### Paste sequence(s)
+
+Use this when you already have the protein sequence.
+
+FASTA example:
+
+```text
+>MyProtein
+MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQKDW...
+```
+
+Raw sequence is also allowed, but FASTA is better because it keeps the protein name.
+
+### Upload FASTA file
+
+Use this for one or many protein sequences saved as `.fasta`, `.fa`, `.faa`, or `.txt`.
+
+### Upload CSV file
+
+Use this for a table of proteins.
+
+Accepted column names are flexible:
+
+| Purpose | Column names that work |
+|---|---|
+| Protein name | `protein`, `name`, `gene`, `label` |
+| UniProt ID | `uniprot`, `accession`, `entry` |
+| Sequence | `sequence`, `seq` |
+
+CSV example:
+
+```csv
+protein_name,uniprot_id,sequence
+AKAP10,O43572,
+Ezrin,,
+My_custom_protein,,MAAADSGRLHAAAL...
+```
+
+If a sequence is missing, the app tries to fetch it from UniProt.
+
+---
+
+## 5. Recommended settings for non-experts
+
+Use the default settings first.
+
+| Setting | Recommended value | Meaning |
+|---|---:|---|
+| PKA-RIIα threshold | 7.0 | Sensitive default for RII-like motifs |
+| PKA-RIα threshold | 12.0 | Sensitive default for RI-like motifs |
+| Require literal regex match | OFF | Leave off; turning it on may miss real motifs |
+| Enable ML scoring | ON if available | Adds an extra machine-learning confidence score |
+| ML probability threshold | 0.5 | Balanced default |
+
+For stricter screening, increase thresholds or set ML probability to 0.7–0.8.
+
+---
+
+## 6. What each result value means
+
+### Main columns
+
+| Column | Simple meaning | How to interpret |
 |---|---|---|
-| `classification` | `AKAP` | `ambiguous`, `DDIP`, or `unlikely` |
-| `pssm_score` | Higher than other hits of the same isoform | Near threshold |
-| `ml_prob` | Close to 1.0 | Around or below 0.5 |
-| `n_negdet` | 0 | 1 or more |
-| `amphipathic` | True | False |
-| `canonical` | True supports the hit | False is not automatic rejection |
+| `protein` | Protein name or accession | Which protein contains the predicted motif |
+| `isoform` | RII or RI | Which PKA regulatory subunit type the motif resembles |
+| `classification` | Overall motif class | Start here first |
+| `start`, `end` | Position in the protein | Location of the predicted motif |
+| `core` | Main motif sequence | Short region most important for docking |
+| `window` | Longer scored sequence | Full sequence window used by the model |
+| `pssm_score` | Similarity to known motifs | Higher is stronger; rank RI and RII separately |
+| `ml_prob` | ML confidence | Near 1.0 is stronger; around 0.5 is moderate |
+| `dual` | Overlapping RI/RII prediction | May indicate a region compatible with both RI and RII |
+| `canonical` | Strict motif-pattern match | Helpful if true, but false does not automatically mean wrong |
+| `amphipathic` | Helix face pattern check | True supports AKAP-like behavior |
+| `pI` | Estimated charge property | Annotation only; not pass/fail |
+| `n_negdet` | Number of negative determinants | 0 is best; more can weaken confidence |
+| `negdet_severity` | Severity of negative determinants | `none` is best; higher severity means more caution |
+| `helix_turns` | Approximate hydrophobic-face length | More turns generally support AKAP-like binding |
+| `dd_class` | Predicted D/D-domain interaction class | Helps separate AKAP-like vs DDIP-like behavior |
 
-Use the screener as a prioritization tool. A predicted motif is a candidate for follow-up, not final proof of PKA binding.
+---
+
+## 7. How to interpret classification
+
+| Classification | Meaning | Priority |
+|---|---|---|
+| **AKAP** | Strong candidate PKA-anchoring motif | High priority |
+| **ambiguous** | Possible motif but not fully clear | Medium priority; inspect manually |
+| **DDIP** | May bind a D/D-like groove but not predicted as strong PKA anchor | Context-dependent |
+| **unlikely** | Weak or disrupted motif | Low priority |
+
+---
+
+## 8. What is a good hit?
+
+A stronger candidate usually has:
+
+- `classification = AKAP`
+- High `pssm_score`
+- High `ml_prob`, if ML is available
+- `n_negdet = 0`
+- `amphipathic = True`
+- A reasonable helix-like hydrophobic pattern in the helical wheel plot
+- Biological context that makes sense for PKA regulation
+
+A weaker candidate may have:
+
+- `classification = ambiguous` or `unlikely`
+- Low PSSM score
+- Low ML probability
+- Many negative determinants
+- Acidic residues on hydrophobic anchor positions
+
+---
+
+## 9. What to do after getting hits
+
+For publication-quality analysis, do not stop at the table. Recommended follow-up:
+
+1. Confirm the protein accession and isoform.
+2. Check whether the predicted region is conserved.
+3. Check secondary-structure tendency with AlphaFold, NetSurfP, PSIPRED, or similar tools.
+4. Compare with known AKAP motifs in the literature.
+5. Design mutations at hydrophobic anchor positions.
+6. Test binding experimentally, for example peptide binding, pull-down, co-IP, or localization assay.
+
+---
+
+## 10. Common problems
+
+### “I clicked Search UniProt but Run AKAP Screen shows nothing.”
+
+Use the updated `akap_app.py`. It saves fetched UniProt proteins in Streamlit session state so they remain available after the next button click.
+
+### “No hit was found.”
+
+This means no region passed the current thresholds. It does not prove the protein cannot interact with PKA. Check the sequence, use default thresholds, and consider splice isoforms.
+
+### “Too many hits were found.”
+
+Increase thresholds or set ML probability threshold to 0.7–0.8. Then prioritize `classification = AKAP` and `n_negdet = 0`.
+
+### “The protein name gives the wrong UniProt entry.”
+
+Use the exact UniProt accession instead of a gene/protein name.
+
+---
+
+## 11. One-sentence interpretation template
+
+Use this wording when reporting a result:
+
+> The AKAP Domain Screener predicted an AKAP-like motif in [protein] at residues [start]–[end], with [isoform] preference, PSSM score [score], ML probability [probability], and [number] negative determinants. This region should be considered a candidate motif for experimental validation.
+
+---
 
 ## Quick start
 
 ### Web app (Streamlit)
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://akapspred.streamlit.app/)
+
+```bash
+pip install -r requirements.txt
+streamlit run akap_app.py
+```
 
 The app accepts:
 - **Paste** a sequence or FASTA
@@ -233,3 +441,8 @@ Each hit is annotated with its predicted binding partner class:
 ## License
 
 MIT
+
+
+---
+
+🧬 AKAP Domain Screener — kowith@ccs.tsukuba.ac.jp
