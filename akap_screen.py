@@ -389,10 +389,11 @@ def predict_specificity(seq, pssm):
 # ═════════════════════════════════════════════════════════════════════════════
 _ML_BUNDLE = None     # loaded lazily
 _ML_MODEL_NAME = ""
+_ML_LOAD_ERROR = None  # last model-load error, surfaced by app/CLI
 
 def load_ml_model(path=None):
     """Load ML model bundle. Returns dict {iso: {model, scaler, feat_names}} or None."""
-    global _ML_BUNDLE, _ML_MODEL_NAME
+    global _ML_BUNDLE, _ML_MODEL_NAME, _ML_LOAD_ERROR
     if _ML_BUNDLE is not None:
         return _ML_BUNDLE
     try:
@@ -409,11 +410,26 @@ def load_ml_model(path=None):
         "akap_ml_model_v2.joblib",
         "akap_ml_model.joblib",
     ]
+    global _ML_LOAD_ERROR
+    tried = []
     for p in candidates:
         if os.path.exists(p):
-            _ML_BUNDLE = joblib.load(p)
-            _ML_MODEL_NAME = os.path.basename(p)
-            return _ML_BUNDLE
+            tried.append(p)
+            try:
+                _ML_BUNDLE = joblib.load(p)
+                _ML_MODEL_NAME = os.path.basename(p)
+                _ML_LOAD_ERROR = None
+                return _ML_BUNDLE
+            except Exception as e:
+                # Do NOT swallow silently: record the real reason (usually a
+                # scikit-learn / xgboost / numpy version mismatch when unpickling)
+                # so the app and CLI can report it instead of "ML unavailable".
+                _ML_LOAD_ERROR = f"{type(e).__name__} while loading {os.path.basename(p)}: {e}"
+                import sys as _sys
+                print(f"[ml-load-error] {_ML_LOAD_ERROR}", file=_sys.stderr)
+                continue
+    if not tried:
+        _ML_LOAD_ERROR = "no model file found (akap_ml_model_v2.joblib / akap_ml_model.joblib)"
     return None
 
 

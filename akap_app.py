@@ -32,10 +32,12 @@ _HAVE_ML = False
 _ML_BUNDLE = None
 _ML_MODEL_PATH = None
 _ML_METADATA = {}
+_ML_LOAD_ERROR = None
 try:
     # Use backend loader so CLI and app share the same model loading behavior.
     _ML_BUNDLE = A.load_ml_model()
     _HAVE_ML = _ML_BUNDLE is not None
+    _ML_LOAD_ERROR = getattr(A, "_ML_LOAD_ERROR", None)
     for _candidate in ("akap_ml_model_v2.joblib", "akap_ml_model.joblib"):
         _p = os.path.join(SCRIPT_DIR, _candidate)
         if os.path.exists(_p):
@@ -48,7 +50,7 @@ try:
 except Exception as _e:
     _HAVE_ML = False
     _ML_BUNDLE = None
-    _ML_METADATA = {}
+    _ML_LOAD_ERROR = f"{type(_e).__name__}: {_e}"
 
 # ─── Load PSSM ───
 PSSM = A.load_pssm()
@@ -444,6 +446,14 @@ def main():
         use_ml = st.checkbox("Enable ML scoring", value=_HAVE_ML,
                              disabled=not _HAVE_ML,
                              help="Use the selected v2 ML model as the second-stage proteomic prioritization layer")
+        if _HAVE_ML:
+            st.caption(f"✅ ML model loaded: {os.path.basename(_ML_MODEL_PATH or 'akap_ml_model_v2.joblib')}")
+        else:
+            st.error("⚠️ ML model NOT loaded — running rule-only (you will see `ML unavailable`).")
+            if _ML_LOAD_ERROR:
+                st.caption(f"Reason: {_ML_LOAD_ERROR}")
+            st.caption("Usually a scikit-learn / xgboost / numpy version mismatch when unpickling, "
+                       "or the .joblib not present in the deployed repo. Pin versions in requirements.txt.")
         ml_thr = 0.0
         if use_ml and _HAVE_ML:
             ml_thr = st.slider("ML high-confidence threshold", 0.0, 1.0, 0.80, 0.05)
