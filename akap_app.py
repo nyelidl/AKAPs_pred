@@ -212,11 +212,16 @@ def run_screen(proteins, rii_thr, ri_thr, use_ml, ml_thr, strict):
     """Run the AKAP screen on a list of (name, sequence) pairs."""
     results = []
     for pid, seq in proteins:
+        spec = A.predict_specificity(seq, PSSM) if hasattr(A, "predict_specificity") else {}
         for iso, wlen, thr in [("RII", 24, rii_thr), ("RI", 30, ri_thr)]:
             hits = A.scan_isoform(seq, iso, PSSM, thr, strict)
             for h in hits:
                 row = dict(
                     protein=pid, isoform=iso,
+                    predicted_specificity=spec.get("predicted_specificity", ""),
+                    ri_best=spec.get("ri_best"),
+                    rii_best=spec.get("rii_best"),
+                    ri_rii_ratio=spec.get("ri_rii_ratio"),
                     start=h["win_start"], end=h["win_end"],
                     core=h["core"], window=h["window"],
                     pssm_score=h["pssm_score"], canonical=h["canonical"],
@@ -735,7 +740,8 @@ def main():
                 st.subheader("🎯 Hit Table")
 
                 # Format for display
-                display_cols = ["protein", "isoform", "classification", "dual", "start", "end",
+                display_cols = ["protein", "isoform", "predicted_specificity", "ri_best", "rii_best",
+                                "ri_rii_ratio", "classification", "dual", "start", "end",
                                 "core", "pssm_score", "canonical", "amphipathic", "pI",
                                 "n_negdet", "negdet_severity", "helix_turns", "dd_class"]
                 if use_ml and _HAVE_ML:
@@ -747,6 +753,18 @@ def main():
                     results[[c for c in display_cols if c in results.columns]],
                     use_container_width=True,
                     column_config={
+                        "predicted_specificity": st.column_config.TextColumn(
+                            "Specificity",
+                            help="Protein-level RI/RII preference from full-sequence best RI and RII PSSM scores. Example: SPHKAP should be RI-specific even if a weak RII-like window crosses threshold."),
+                        "ri_best": st.column_config.NumberColumn(
+                            "Best RI", format="%.2f",
+                            help="Best RI PSSM score found anywhere in the full protein sequence."),
+                        "rii_best": st.column_config.NumberColumn(
+                            "Best RII", format="%.2f",
+                            help="Best RII PSSM score found anywhere in the full protein sequence."),
+                        "ri_rii_ratio": st.column_config.NumberColumn(
+                            "RI/RII", format="%.2f",
+                            help="Ratio of best RI score to best RII score. Higher values indicate RI preference; low values indicate RII preference."),
                         "pssm_score": st.column_config.NumberColumn("PSSM Score", format="%.2f",
                             help="Similarity to known AKAP motifs. Higher = more AKAP-like. Rank RII and RI hits separately."),
                         "ml_prob": st.column_config.ProgressColumn("ML Prob", min_value=0, max_value=1, format="%.3f",
@@ -825,13 +843,14 @@ def main():
                         )
 
                         # Details
-                        detail_cols = st.columns(6)
+                        detail_cols = st.columns(7)
                         detail_cols[0].metric("Classification", hit.get("classification", "—"))
                         detail_cols[1].metric("pI", f"{hit['pI']:.2f}")
                         detail_cols[2].metric("Helix turns", f"{hit.get('helix_turns', 0):.1f}")
                         detail_cols[3].metric("Neg. determinants", hit.get("n_negdet", 0))
                         detail_cols[4].metric("Canonical", "✅" if hit["canonical"] else "❌")
                         detail_cols[5].metric("d/d class", hit.get("dd_class", "—"))
+                        detail_cols[6].metric("Specificity", hit.get("predicted_specificity", "—"))
 
                 # ── Score distribution ──
                 if len(results) > 3:

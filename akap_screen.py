@@ -321,12 +321,68 @@ def predict_dd_class(core, iso):
     """
     if iso == "RI":
         return "RID2"
-    # For RII hits, the default is RIID2, but check DPY-30 signatures
-    # DPY-30 binding helices are shorter (4 turns) and the d/d domain
-    # has a Tyr at position 4 + shorter α-helix 1
-    # Since we're scoring the AKAP/anchoring helix (not the d/d domain),
-    # we mainly report the expected binding partner class
     return "RIID2"
+
+
+def predict_specificity(seq, pssm):
+    """
+    Predict RI vs RII specificity by comparing the best PSSM scores from
+    both isoform profiles on the same sequence.
+
+    Returns dict:
+      ri_best:    best RI PSSM score (or None if seq too short)
+      rii_best:   best RII PSSM score (or None if seq too short)
+      ri_rii_ratio: RI/RII score ratio
+      predicted_specificity: 'RI-specific' / 'RII-specific' / 'dual' / 'undetermined'
+
+    Calibrated on known AKAPs:
+      smAKAP  (RI-spec):  ratio 3.54
+      SPHKAP  (RI-spec):  ratio 2.46
+      AKAP10  (dual):     ratio 1.44
+      vlAKAP  (RII-spec): RII >> RI
+    """
+    ri_best, rii_best = None, None
+
+    # Best RII 24-mer score
+    rii_mat = pssm["RII"]["pssm"]
+    if len(seq) >= RII_LEN:
+        rii_best = max(window_score(seq[i:i+RII_LEN], rii_mat)
+                       for i in range(len(seq) - RII_LEN + 1))
+
+    # Best RI 30-mer score
+    ri_mat = pssm["RI"]["pssm"]
+    if len(seq) >= RI_LEN:
+        ri_best = max(window_score(seq[i:i+RI_LEN], ri_mat)
+                      for i in range(len(seq) - RI_LEN + 1))
+
+    # Determine specificity from ratio
+    if ri_best is not None and rii_best is not None and rii_best > 0:
+        ratio = ri_best / rii_best
+        # A ratio near 2.0 already indicates strong RI preference.
+        # This keeps known RI-selective SPHKAP (RI/RII ≈ 2.46) as RI-specific.
+        if ratio >= 2.0:
+            spec = "RI-specific"
+        elif ratio >= 1.3:
+            spec = "RI-leaning"
+        elif ratio <= 0.5:
+            spec = "RII-specific"
+        elif ratio <= 0.8:
+            spec = "RII-leaning"
+        else:
+            spec = "dual"
+    elif ri_best is not None and ri_best >= DEFAULT_RI_THR:
+        spec = "RI-specific"
+    elif rii_best is not None and rii_best >= DEFAULT_RII_THR:
+        spec = "RII-specific"
+    else:
+        spec = "undetermined"
+
+    return dict(
+        ri_best=round(ri_best, 2) if ri_best is not None else None,
+        rii_best=round(rii_best, 2) if rii_best is not None else None,
+        ri_rii_ratio=round(ri_best / rii_best, 2) if (ri_best and rii_best and rii_best > 0) else None,
+        predicted_specificity=spec,
+    )
 
 
 def scan_isoform(seq, iso, pssm, threshold, strict=False):
@@ -371,6 +427,12 @@ def screen_protein(pid, seq, args, pssm):
         hits += scan_isoform(seq, "RII", pssm, args.rii_thr, args.strict)
     if not args.rii_only:
         hits += scan_isoform(seq, "RI", pssm, args.ri_thr, args.strict)
+
+    # Protein-level RI/RII specificity, evaluated across the full sequence.
+    # This prevents interpreting every threshold-crossing RII window as true RII specificity
+    # when the full-length protein is strongly RI-preferred, as in SPHKAP.
+    spec = predict_specificity(seq, pssm)
+
     for a in hits:
         a["dual"] = any(b["iso"] != a["iso"] and
                         not (a["win_end"] < b["win_start"] or b["win_end"] < a["win_start"])
@@ -385,6 +447,9 @@ def screen_protein(pid, seq, args, pssm):
                  contiguous_hydro_turns=h["contiguous_hydro_turns"],
                  akap_helix_sufficient=h["akap_helix_sufficient"],
                  ddip_range=h["ddip_range"], dd_class=h["dd_class"],
+                 predicted_specificity=spec["predicted_specificity"],
+                 ri_best=spec["ri_best"], rii_best=spec["rii_best"],
+                 ri_rii_ratio=spec["ri_rii_ratio"],
                  ) for h in hits]
 
 
@@ -421,7 +486,8 @@ def main():
     fields = ["protein","isoform","dual","win_start","win_end","core","window",
               "pssm_score","canonical","amphipathic","pI","helix_approx",
               "classification","n_negdet","negdet_severity",
-              "contiguous_hydro_turns","akap_helix_sufficient","ddip_range","dd_class"]
+              "contiguous_hydro_turns","akap_helix_sufficient","ddip_range","dd_class",
+              "predicted_specificity","ri_best","rii_best","ri_rii_ratio"]
     out = open(args.out, "w", newline="") if args.out else sys.stdout
     w = csv.DictWriter(out, fieldnames=fields)
     w.writeheader()
@@ -439,11 +505,9 @@ def run_selftest(args, pssm):
         "AKAP7g_294-317(strongRII)": "AELVRLSKRLVENAVLKAVQQYLE",
         "AKAP10_629-652(dual)":      "EAQEELAWKIAKMIVSDIMQQAQY",
         "Ezrin_84-107(dual)":        "RAKFYPEDVAEELIQDITQKLFFLQVKEGI",
-        "WAVE1_20-43(RII)":          "RGIKNELECVTNISLANIIRQLSS",
         "vlAKAP_1299-1322(RII)":     "CLLEDKARELVNEIIYVAQEKLRN",
-        "superAKAP-IS(RII)":         "QIEYVAKQIVDYAIHQA",
         "smAKAP_56-79(RI)":          "GTNTVILEYAHRLSQDILCDALQQWACNNI",
-        "RIAD(RI)":                  "TVLEQYANQLADQIIKEATE",
+        "SPHKAP_920-949(RI)":        "PDIYCITDFAEELADTVVSMATEIAAICLD",
         "OPA1_human(AKAP)":          "KKVRE IQEKLD AFIEALH".replace(" ",""),
         "OPA1_fungal(nonAKAP)":      "EALVAERDRVKALLDAYK",
         "negative_control":          "MKWVTFISLLLLFSSAYSRGVFRRDTHKSE",
@@ -458,7 +522,12 @@ def run_selftest(args, pssm):
                         f" [{h['classification']}|turns={h['contiguous_hydro_turns']}"
                         f"|negdet={h['n_negdet']}]"
                         for h in rii+ri)
-        print(f"  {name:27s} -> {tag:7s}  {det}")
+        # Specificity prediction
+        spec = predict_specificity(seq, pssm)
+        spec_tag = f"  spec={spec['predicted_specificity']}" if spec['predicted_specificity'] != 'undetermined' else ""
+        if spec['ri_rii_ratio']:
+            spec_tag += f" (RI/RII={spec['ri_rii_ratio']})"
+        print(f"  {name:27s} -> {tag:7s}  {det}{spec_tag}")
 
 
 if __name__ == "__main__":

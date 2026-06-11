@@ -289,24 +289,26 @@ def main():
 
     all_rows = []
     for pid, seq in entries:
-        # Build a minimal args-like object for screen_protein
-        hits = []
-        if not args.ri_only:
-            hits += A.scan_isoform(seq, "RII", pssm, args.rii_thr, args.strict)
-        if not args.rii_only:
-            hits += A.scan_isoform(seq, "RI", pssm, args.ri_thr, args.strict)
-        # dual flag
-        for a in hits:
-            a["dual"] = any(b["iso"] != a["iso"] and
-                            not (a["win_end"] < b["win_start"] or b["win_end"] < a["win_start"])
-                            for b in hits)
-        for h in hits:
-            all_rows.append(dict(
-                protein=pid, isoform=h["iso"], dual=h["dual"],
-                win_start=h["win_start"], win_end=h["win_end"],
-                core=h["core"], window=h["window"], pssm_score=h["pssm_score"],
-                canonical=h["canonical"], amphipathic=h["amphipathic"],
-                pI=h["pI"], helix_approx=h["helix_approx"]))
+        if hasattr(A, "screen_protein"):
+            all_rows.extend(A.screen_protein(pid, seq, args, pssm))
+        else:
+            # Fallback for older akap_screen.py versions
+            hits = []
+            if not args.ri_only:
+                hits += A.scan_isoform(seq, "RII", pssm, args.rii_thr, args.strict)
+            if not args.rii_only:
+                hits += A.scan_isoform(seq, "RI", pssm, args.ri_thr, args.strict)
+            for a in hits:
+                a["dual"] = any(b["iso"] != a["iso"] and
+                                not (a["win_end"] < b["win_start"] or b["win_end"] < a["win_start"])
+                                for b in hits)
+            for h in hits:
+                all_rows.append(dict(
+                    protein=pid, isoform=h["iso"], dual=h["dual"],
+                    win_start=h["win_start"], win_end=h["win_end"],
+                    core=h["core"], window=h["window"], pssm_score=h["pssm_score"],
+                    canonical=h["canonical"], amphipathic=h["amphipathic"],
+                    pI=h["pI"], helix_approx=h["helix_approx"]))
 
     all_rows.sort(key=lambda r: -r["pssm_score"])
 

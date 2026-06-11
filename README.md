@@ -1,8 +1,5 @@
 # 🧬 AKAP Domain Screener
 
-### Web app (Streamlit)
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://akapspred.streamlit.app/)
-
 Screen proteins for **A-Kinase Anchoring Protein (AKAP)** amphipathic-helix motifs that bind PKA regulatory subunits.
 
 Based on: **Burgers et al. (2015)** *"A Systematic Evaluation of Protein Kinase A–A-Kinase Anchoring Protein Interaction Motifs"*, Biochemistry 54, 11–21. [DOI: 10.1021/bi500721a](https://doi.org/10.1021/bi500721a)
@@ -446,3 +443,17 @@ MIT
 ---
 
 🧬 AKAP Domain Screener — kowith@ccs.tsukuba.ac.jp
+
+
+## v4 update: DDIP/AKAP and RI/RII specificity
+
+This version adds a practical interpretation layer inspired by Falcone & Scott (2025):
+
+- **classification**: AKAP, DDIP, ambiguous, or unlikely.
+- **n_negdet / negdet_severity**: flags Asp/Glu residues on hydrophobic anchor positions. These are negative determinants for PKA anchoring.
+- **helix_turns**: estimated amphipathic-helix extent. Longer helices support AKAP-like anchoring; shorter 3–4 turn helices may be DDIP-like.
+- **dd_class**: predicted d/d-domain partner class, currently RIID2 for RII-like hits and RID2 for RI-like hits.
+- **predicted_specificity**: full-protein RI/RII preference call. This is important for proteins such as **SPHKAP**, which should be interpreted as **RI-specific** even if a weaker RII-like window also crosses the RII threshold.
+- **ri_best / rii_best / ri_rii_ratio**: the best RI score, best RII score, and their ratio across the full sequence.
+
+For non-expert users: prioritize hits with **classification = AKAP**, **n_negdet = 0**, and a specificity label that matches your biological question. Treat **DDIP**, **ambiguous**, and **unlikely** as lower-confidence candidates that need experimental validation.
