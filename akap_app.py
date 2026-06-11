@@ -222,6 +222,12 @@ def run_screen(proteins, rii_thr, ri_thr, use_ml, ml_thr, strict):
                     pssm_score=h["pssm_score"], canonical=h["canonical"],
                     amphipathic=h["amphipathic"], pI=h["pI"],
                     helix_approx=h["helix_approx"],
+                    # DDIP analysis (Falcone & Scott 2025)
+                    classification=h.get("classification", ""),
+                    n_negdet=h.get("n_negdet", 0),
+                    negdet_severity=h.get("negdet_severity", "none"),
+                    helix_turns=h.get("contiguous_hydro_turns", 0),
+                    dd_class=h.get("dd_class", ""),
                 )
                 # ML scoring
                 if use_ml and _HAVE_ML and iso in _ML_BUNDLE:
@@ -397,10 +403,13 @@ def main():
     st.markdown("""
     # 🧬 AKAP Domain Screener
     **Screen proteins for A-Kinase Anchoring Protein (AKAP) amphipathic-helix motifs**
+    **with DDIP vs AKAP discrimination**
 
-    Based on: Burgers et al. (2015) *Biochemistry* 54, 11–21
+    Based on:
+    - Burgers et al. (2015) *Biochemistry* 54, 11–21 — PSSM from THAHIT tool
     ([DOI: 10.1021/bi500721a](https://doi.org/10.1021/bi500721a))
-    — PSSM profile scanner calibrated on 849 RIIα + 28 RIα motifs from the THAHIT tool.
+    - Falcone & Scott (2025) *Biochem J* 482, 485–498 — DDIP/AKAP classification
+    ([DOI: 10.1042/BCJ20253085](https://doi.org/10.1042/BCJ20253085))
     """)
 
     # ── Sidebar: Parameters ──
@@ -433,6 +442,21 @@ def main():
         (hydrophobic moment, FFT amphipathicity, helix propensity, anchor hydrophobicity).
 
         **RII AUC = 0.999** | **RI AUC = 1.000**
+
+        ---
+
+        **🆕 DDIP vs AKAP classification**
+        *(Falcone & Scott, Biochem J 2025)*
+
+        | Class | Meaning |
+        |---|---|
+        | **AKAP** | Strong PKA anchor (≥5 helix turns, no negdets) |
+        | **DDIP** | D/D domain interactor — binds d/d groove but NOT PKA |
+        | **ambiguous** | Could be either — needs experimental validation |
+        | **unlikely** | Charged residue (D/E) disrupts hydrophobic face |
+
+        **Negative determinants**: Asp/Glu at hydrophobic anchor positions
+        abolish PKA binding (demonstrated in OPA1 fungal forms & smAKAP S66D).
         """)
 
     # ── Input ──
@@ -606,22 +630,33 @@ def main():
                 st.subheader("🎯 Hit Table")
 
                 # Format for display
-                display_cols = ["protein", "isoform", "dual", "start", "end",
-                                "core", "pssm_score", "canonical", "amphipathic", "pI"]
+                display_cols = ["protein", "isoform", "classification", "dual", "start", "end",
+                                "core", "pssm_score", "canonical", "amphipathic", "pI",
+                                "n_negdet", "negdet_severity", "helix_turns", "dd_class"]
                 if use_ml and _HAVE_ML:
-                    display_cols.insert(7, "ml_prob")
+                    display_cols.insert(8, "ml_prob")
                     display_cols.extend(["hydro_moment", "fft_amphi"])
 
+                # Color-code classification
                 st.dataframe(
-                    results[display_cols],
+                    results[[c for c in display_cols if c in results.columns]],
                     use_container_width=True,
                     column_config={
                         "pssm_score": st.column_config.NumberColumn("PSSM Score", format="%.2f"),
                         "ml_prob": st.column_config.ProgressColumn("ML Prob", min_value=0, max_value=1, format="%.3f"),
                         "pI": st.column_config.NumberColumn("pI", format="%.2f"),
+                        "helix_turns": st.column_config.NumberColumn("Helix Turns", format="%.1f"),
                         "dual": st.column_config.CheckboxColumn("Dual"),
                         "canonical": st.column_config.CheckboxColumn("Canonical"),
                         "amphipathic": st.column_config.CheckboxColumn("Amphipathic"),
+                        "classification": st.column_config.TextColumn("Class",
+                            help="AKAP=strong PKA anchor, DDIP=D/D domain interactor (no PKA), "
+                                 "unlikely=charged residue disrupts hydrophobic face"),
+                        "n_negdet": st.column_config.NumberColumn("NegDet",
+                            help="Charged residues (D/E) at hydrophobic anchor positions — blocks PKA binding"),
+                        "negdet_severity": st.column_config.TextColumn("Severity"),
+                        "dd_class": st.column_config.TextColumn("d/d Class",
+                            help="Predicted d/d domain partner: RIID2 (PKA-RII), RID2 (PKA-RI), DPY-30"),
                     },
                 )
 
@@ -677,12 +712,13 @@ def main():
                         )
 
                         # Details
-                        detail_cols = st.columns(5)
-                        detail_cols[0].metric("pI", f"{hit['pI']:.2f}")
-                        detail_cols[1].metric("Helix prop.", f"{hit['helix_approx']:.2f}")
-                        detail_cols[2].metric("Canonical", "✅" if hit["canonical"] else "❌")
-                        detail_cols[3].metric("Amphipathic", "✅" if hit["amphipathic"] else "❌")
-                        detail_cols[4].metric("Dual", "✅" if hit["dual"] else "❌")
+                        detail_cols = st.columns(6)
+                        detail_cols[0].metric("Classification", hit.get("classification", "—"))
+                        detail_cols[1].metric("pI", f"{hit['pI']:.2f}")
+                        detail_cols[2].metric("Helix turns", f"{hit.get('helix_turns', 0):.1f}")
+                        detail_cols[3].metric("Neg. determinants", hit.get("n_negdet", 0))
+                        detail_cols[4].metric("Canonical", "✅" if hit["canonical"] else "❌")
+                        detail_cols[5].metric("d/d class", hit.get("dd_class", "—"))
 
                 # ── Score distribution ──
                 if len(results) > 3:
@@ -709,6 +745,8 @@ def main():
     AKAP Domain Screener • PSSM + ML pipeline •
     Based on <a href="https://doi.org/10.1021/bi500721a">Burgers et al. (2015)</a> •
     PSSM from 849 RIIα + 28 RIα motifs
+    <br>
+    🧬 AKAP Domain Screener — kowith@ccs.tsukuba.ac.jp
     </div>
     """, unsafe_allow_html=True)
 
