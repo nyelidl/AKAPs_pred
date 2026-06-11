@@ -1,4 +1,5 @@
 # 🧬 AKAP Domain Screener
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://akapspred.streamlit.app/)
 
 Screen proteins for **A-Kinase Anchoring Protein (AKAP)** amphipathic-helix motifs that bind PKA regulatory subunits.
 
@@ -444,8 +445,6 @@ MIT
 
 🧬 AKAP Domain Screener — kowith@ccs.tsukuba.ac.jp
 
-
-## v4 update: DDIP/AKAP and RI/RII specificity
 
 This version adds a practical interpretation layer inspired by Falcone & Scott (2025):
 
