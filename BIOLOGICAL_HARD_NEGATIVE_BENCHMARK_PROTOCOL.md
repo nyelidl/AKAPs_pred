@@ -51,6 +51,15 @@ and `.csv`. Summary:
 6. **DDIP-like / DPY30-binding** — engage a D/D-*like* fold but not PKA RI/RII;
    discriminator: shorter helix, non-PKA partner specificity. *stress_test; only
    train if non-PKA-anchoring status is experimentally confirmed.*
+7. **PDE / GAF-domain regulatory & dimerization amphipathic helices** (parent:
+   `generic_intramolecular_or_dimerization_amphipathic_helix`) — amphipathic helices
+   in phosphodiesterase regulatory (GAF) domains whose hydrophobic face supports
+   domain packing / homodimerization, not PKA anchoring. PDEs sit *inside* cAMP/PKA
+   compartments (some, like PDE2A, even regulate mitochondrial PKA signalling) but
+   are not AKAPs. discriminator: regulatory/dimerization context, GAF-domain
+   architecture, absence of a D/D-compatible anchor pattern. *training_candidate +
+   stress_test — contains the first confirmed real danger-zone false positive (PDE2A
+   404-427).*
 
 ## Controls — kept strictly separate (via `set_type`)
 
@@ -103,11 +112,36 @@ For every danger-zone hit, the harness records and the report interprets:
 | Apolipoprotein / lipid | training_candidate | lipid-binding snorkel pattern; central polar-face acidic cluster; tandem 11/22-mer periodicity; hydrophobic-face charge disruption |
 | Helix-in-groove PPI | stress_test_only (holdout) | helix-in-groove anchor spacing; 5-turn AKAP support; helix length |
 | DDIP-like | stress_test_only until labels clean | DDIP-like short-helix support; D/D-like-but-non-PKA partner signature |
+| PDE / GAF-domain dimerization | **training_candidate (very high priority)** | regulatory/dimerization-context flag; GAF-domain architecture; hydrophobic-face-binds-self/partner vs D/D groove; hydrophobic-face continuity |
 
 Cross-cutting v3 features motivated by this benchmark: hydrophobic-face
 continuity, 5-turn AKAP support, hydrophobic-face charge disruption, polar-face
 charge distribution. Easy negatives are already handled by PSSM, so v3's real
 negatives should concentrate in the **amphipathic + high-PSSM** region.
+
+## Confirmed real-protein false positive (logged 2026-06-12)
+
+A real AKAPSpred v5.1 + ML v2 screen of phosphodiesterases produced the first
+confirmed danger-zone false positive: **PDE2A 404-427 (VSVLLQEIITEA)** — PSSM
+15.14, ML 0.992, amphipathic, promoted to `high` via the high-background downgrade.
+PDE2A is a phosphodiesterase; this window lies in the GAF-B regulatory/dimerization
+domain, not a PKA RI/RII D/D anchoring helix. It is classified as a **biologically
+supported non-AKAP contextual false positive (domain/function annotation)** — NOT an
+experimentally proven non-binder, since no direct PKA binding assay exists; the
+burden of proof is on the AKAP-positive call. Same-family controls behaved
+correctly: PDE3A 64-87, PDE4D 267-290, and PDE2A 302-325/57-80 were all held below
+high. See `HARD_NEGATIVE_DIAGNOSTIC_REPORT.md`.
+
+This sharpens the v3 hard-negative priority. In rank order:
+1. **High-PSSM amphipathic non-AKAPs** (the danger zone) — the only region where
+   ML must add value beyond the PSSM; now confirmed to leak in real proteins.
+2. Domain-packing helices.
+3. Dimerization helices.
+4. GAF / regulatory-domain helices.
+5. Coiled-coil / PPI-like helices.
+
+PDE2A 404-427 becomes a priority `training_candidate` for v3; the three correctly
+rejected PDE windows serve as same-family / same-protein negative controls.
 
 ## Sourcing verified sequences (no fabrication)
 

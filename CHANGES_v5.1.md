@@ -32,3 +32,14 @@ ML_HIGH_BG_THR=0.95, HIGH_BG_PSSM_BONUS=2.0
 
 ## Notebook
 - AKAPSpred_synthetic_10k_validation_colab_v51.ipynb: v5.1 note + window_level_summary display.
+
+## Streamlit diagnostics tab (this update)
+- akap_app.py: added a sidebar "View" toggle and a read-only "📊 Model diagnostics"
+  page with: deployed-model card (v5.1 / ML v2 / v3 not deployed), the PDE sanity-check
+  table, the PDE2A 404–427 contextual false-positive note (annotation-based, not an
+  experimental non-binder; burden of proof on the AKAP-positive call), the danger-zone
+  limitation (amphipathic & PSSM≥12 & non-AKAP context), the ML v3 hard-negative
+  direction, and user guidance (high-confidence = candidate, review danger-zone hits).
+- Prediction behavior, confidence logic, thresholds, and the ML v2 model are UNCHANGED.
+  The diagnostics view renders then st.stop()s; the screener path is not touched.
+- No PDE-specific rejection rule was added.

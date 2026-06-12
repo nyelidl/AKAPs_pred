@@ -280,6 +280,85 @@ C(id="DD02", **{"class":"ddip_like"}, protein_or_peptide_name="ASH2L (DPY30-bind
   intended_use="stress_test", priority="medium",
   verification_status="verify_region_and_AKAP_status",
   notes="FLAGGED ambiguous: confirm non-PKA-anchoring before any training use"),
+
+# ── Class 7 — PDE / GAF-domain regulatory & dimerization amphipathic helices ──
+# Parent: generic_intramolecular_or_dimerization_amphipathic_helix
+# Logged from a real AKAPSpred v5.1 + ML v2 screen of phosphodiesterases.
+C(id="PDE01", **{"class":"PDE_GAF_domain_dimerization_helix"},
+  protein_or_peptide_name="PDE2A (GAF-B regulatory helix, 404-427)",
+  organism="Homo sapiens", accession="O00408", database="UniProt", pdb_id="3IBJ",
+  sequence_type="full_protein", known_region="404-427 (core VSVLLQEIITEA); GAF-B domain ~393-541",
+  cellular_location="cytosol / mitochondria-associated (isoform-dependent)",
+  biological_function="cyclic-nucleotide phosphodiesterase regulatory (GAF) domain; cGMP-activated",
+  known_binding_partner="cGMP (GAF-B allosteric site) / PDE2A homodimer interface / intramolecular domain packing",
+  known_binding_surface="regulatory-domain helix; domain-packing / dimerization-associated face (NOT PKA D/D groove)",
+  reason_akap_like="amphipathic helix, high RII PSSM (15.14), ML v2 high score (0.992)",
+  reason_not_akap="PDE2A is a phosphodiesterase; window lies in the GAF-B regulatory domain, "
+                  "not a known PKA RI/RII D/D anchoring domain; hydrophobic face supports "
+                  "domain packing / dimerization, not PKA anchoring",
+  biological_context_evidence="PDE2A domains N-term 1-214, GAF-A 215-372, GAF-B 393-541, catalytic 579-941; "
+                              "homodimer (PNAS 2009, 0907635106)",
+  structural_context_evidence="PDB 3IBJ: GAF/catalytic domains joined by long alpha-helices; "
+                              "dimer interface spans the molecule",
+  expected_failure_mode="high-PSSM amphipathic non-AKAP regulatory/domain-packing helix; "
+                        "promoted via high-bg downgrade (pssm>=14 AND ml>=0.95)",
+  intended_use="training_candidate+stress_test", priority="very_high",
+  verification_status="verify_accession_region",
+  notes="CONFIRMED AKAPSpred v5.1 + ML v2 danger-zone FALSE POSITIVE (final tier=high). "
+        "CLASSIFICATION: biologically supported non-AKAP contextual false positive "
+        "(domain/function annotation); NOT experimentally proven non-binder — no direct "
+        "PKA RI/RII binding assay exists. Burden of proof is on the AKAP-positive call."),
+C(id="PDE02", **{"class":"PDE_GAF_domain_dimerization_helix"},
+  protein_or_peptide_name="PDE3A (N-terminal region, 64-87)",
+  organism="Homo sapiens", accession="Q14432", database="UniProt", pdb_id="",
+  sequence_type="full_protein", known_region="64-87 (core LSFLLALLVRLV)",
+  cellular_location="membrane-associated / cytosol",
+  biological_function="cGMP-inhibited cyclic-nucleotide phosphodiesterase",
+  known_binding_partner="lipid membrane / intramolecular (N-terminal hydrophobic region)",
+  known_binding_surface="membrane-association / domain context (NOT PKA D/D groove)",
+  reason_akap_like="hydrophobic N-terminal region scored by sensitive PSSM scan",
+  reason_not_akap="PDE3A is a phosphodiesterase; window not a known PKA D/D anchoring helix",
+  biological_context_evidence="UniProt Q14432 phosphodiesterase",
+  structural_context_evidence="",
+  expected_failure_mode="below danger zone (pssm 7.64<12) — should be filtered",
+  intended_use="same_family_negative_control", priority="medium",
+  verification_status="verify_region",
+  notes="CORRECTLY REJECTED by v5.1+ML v2 (sensitive_only; pssm 7.64, ml 0.005, amphipathic=False). "
+        "All three layers reject. Same-family negative control."),
+C(id="PDE03", **{"class":"PDE_GAF_domain_dimerization_helix"},
+  protein_or_peptide_name="PDE4D (267-290)",
+  organism="Homo sapiens", accession="Q08499", database="UniProt", pdb_id="",
+  sequence_type="full_protein", known_region="267-290 (core YQKLASETLEEL)",
+  cellular_location="cytosol / membrane (isoform-dependent)",
+  biological_function="cAMP-specific cyclic-nucleotide phosphodiesterase",
+  known_binding_partner="recruited to AKAP/signalosome complexes (e.g. mAKAP, AKAP9) but not itself a PKA anchor",
+  known_binding_surface="regulatory/UCR domain context (NOT PKA D/D groove)",
+  reason_akap_like="amphipathic window scored by sensitive PSSM scan",
+  reason_not_akap="PDE4D is a phosphodiesterase recruited BY AKAPs, not a PKA-anchoring AKAP itself",
+  biological_context_evidence="UniProt Q08499; PDE4D is a signalosome effector",
+  structural_context_evidence="",
+  expected_failure_mode="borderline; rejected (pssm 11.04<12, ml 0.272)",
+  intended_use="same_family_negative_control", priority="medium",
+  verification_status="verify_accession_region",
+  notes="CORRECTLY REJECTED by v5.1+ML v2 (sensitive_only; pssm 11.04, ml 0.272). "
+        "Same-family negative control. NB: PDE4D is recruited by AKAPs but is not an AKAP."),
+C(id="PDE04", **{"class":"PDE_GAF_domain_dimerization_helix"},
+  protein_or_peptide_name="PDE2A (302-325, negative-determinant control)",
+  organism="Homo sapiens", accession="O00408", database="UniProt", pdb_id="",
+  sequence_type="full_protein", known_region="302-325 (core LKDLTSEDVQQL); GAF-A domain ~215-372",
+  cellular_location="cytosol / mitochondria-associated",
+  biological_function="cyclic-nucleotide phosphodiesterase regulatory (GAF-A) domain",
+  known_binding_partner="GAF-A dimerization locus / intramolecular packing",
+  known_binding_surface="regulatory-domain helix (NOT PKA D/D groove)",
+  reason_akap_like="amphipathic window in a GAF regulatory domain",
+  reason_not_akap="phosphodiesterase GAF-A region; also carries a negative determinant on the face",
+  biological_context_evidence="PDE2A GAF-A 215-372 (dimerization locus, PNAS 2002)",
+  structural_context_evidence="",
+  expected_failure_mode="rejected by negative-determinant red flag (n_negdet=1)",
+  intended_use="same_protein_negative_determinant_control", priority="medium",
+  verification_status="verify_region",
+  notes="CORRECTLY REJECTED by v5.1+ML v2 (unlikely; biological red flag, n_negdet=1). "
+        "Same-protein control showing the negative-determinant path firing."),
 ]
 
 OUT = os.path.dirname(os.path.abspath(__file__))
@@ -301,6 +380,7 @@ CLASS_TITLE = {
     "apolipoprotein":"Class 4 — Lipid-binding / apolipoprotein helices",
     "ppi_helix_in_groove":"Class 5 — Generic helix-in-groove PPI motifs",
     "ddip_like":"Class 6 — DDIP-like / DPY30-binding helices",
+    "PDE_GAF_domain_dimerization_helix":"Class 7 — PDE / GAF-domain regulatory & dimerization amphipathic helices (parent: generic_intramolecular_or_dimerization_amphipathic_helix)",
 }
 with open(md_path, "w") as fh:
     fh.write("# Hard-negative candidate list (biological context)\n\n")

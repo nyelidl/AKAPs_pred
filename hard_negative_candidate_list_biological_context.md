@@ -2,7 +2,7 @@
 
 Accessions and regions only — **no sequences**. All entries are `label=non_AKAP`. `verification_status` MUST be cleared before fetching sequence. Entries flagged `verify_..._AKAP_status` are ambiguous and must NOT be used as training negatives until their non-PKA-anchoring status is confirmed.
 
-Total candidates: 21 across 6 classes.
+Total candidates: 25 across 7 classes.
 
 ## Class 1 — Coiled-coil amphipathic helices
 
@@ -238,4 +238,50 @@ Total candidates: 21 across 6 classes.
 - expected failure mode: DDIP-like discrimination test
 - intended use: **stress_test** | priority: **medium** | verification: verify_region_and_AKAP_status
 - notes: FLAGGED ambiguous: confirm non-PKA-anchoring before any training use
+
+## Class 7 — PDE / GAF-domain regulatory & dimerization amphipathic helices (parent: generic_intramolecular_or_dimerization_amphipathic_helix)
+
+### PDE01 — PDE2A (GAF-B regulatory helix, 404-427) (Homo sapiens)
+- accession: **O00408** (UniProt); PDB: 3IBJ; region: 404-427 (core VSVLLQEIITEA); GAF-B domain ~393-541; type: full_protein
+- location: cytosol / mitochondria-associated (isoform-dependent) | function: cyclic-nucleotide phosphodiesterase regulatory (GAF) domain; cGMP-activated
+- binding partner: cGMP (GAF-B allosteric site) / PDE2A homodimer interface / intramolecular domain packing | surface: regulatory-domain helix; domain-packing / dimerization-associated face (NOT PKA D/D groove)
+- AKAP-like because: amphipathic helix, high RII PSSM (15.14), ML v2 high score (0.992)
+- NOT AKAP because: PDE2A is a phosphodiesterase; window lies in the GAF-B regulatory domain, not a known PKA RI/RII D/D anchoring domain; hydrophobic face supports domain packing / dimerization, not PKA anchoring
+- context evidence: PDE2A domains N-term 1-214, GAF-A 215-372, GAF-B 393-541, catalytic 579-941; homodimer (PNAS 2009, 0907635106); structural: PDB 3IBJ: GAF/catalytic domains joined by long alpha-helices; dimer interface spans the molecule
+- expected failure mode: high-PSSM amphipathic non-AKAP regulatory/domain-packing helix; promoted via high-bg downgrade (pssm>=14 AND ml>=0.95)
+- intended use: **training_candidate+stress_test** | priority: **very_high** | verification: verify_accession_region
+- notes: CONFIRMED AKAPSpred v5.1 + ML v2 danger-zone FALSE POSITIVE (final tier=high). CLASSIFICATION: biologically supported non-AKAP contextual false positive (domain/function annotation); NOT experimentally proven non-binder — no direct PKA RI/RII binding assay exists. Burden of proof is on the AKAP-positive call.
+
+### PDE02 — PDE3A (N-terminal region, 64-87) (Homo sapiens)
+- accession: **Q14432** (UniProt); PDB: —; region: 64-87 (core LSFLLALLVRLV); type: full_protein
+- location: membrane-associated / cytosol | function: cGMP-inhibited cyclic-nucleotide phosphodiesterase
+- binding partner: lipid membrane / intramolecular (N-terminal hydrophobic region) | surface: membrane-association / domain context (NOT PKA D/D groove)
+- AKAP-like because: hydrophobic N-terminal region scored by sensitive PSSM scan
+- NOT AKAP because: PDE3A is a phosphodiesterase; window not a known PKA D/D anchoring helix
+- context evidence: UniProt Q14432 phosphodiesterase; structural: —
+- expected failure mode: below danger zone (pssm 7.64<12) — should be filtered
+- intended use: **same_family_negative_control** | priority: **medium** | verification: verify_region
+- notes: CORRECTLY REJECTED by v5.1+ML v2 (sensitive_only; pssm 7.64, ml 0.005, amphipathic=False). All three layers reject. Same-family negative control.
+
+### PDE03 — PDE4D (267-290) (Homo sapiens)
+- accession: **Q08499** (UniProt); PDB: —; region: 267-290 (core YQKLASETLEEL); type: full_protein
+- location: cytosol / membrane (isoform-dependent) | function: cAMP-specific cyclic-nucleotide phosphodiesterase
+- binding partner: recruited to AKAP/signalosome complexes (e.g. mAKAP, AKAP9) but not itself a PKA anchor | surface: regulatory/UCR domain context (NOT PKA D/D groove)
+- AKAP-like because: amphipathic window scored by sensitive PSSM scan
+- NOT AKAP because: PDE4D is a phosphodiesterase recruited BY AKAPs, not a PKA-anchoring AKAP itself
+- context evidence: UniProt Q08499; PDE4D is a signalosome effector; structural: —
+- expected failure mode: borderline; rejected (pssm 11.04<12, ml 0.272)
+- intended use: **same_family_negative_control** | priority: **medium** | verification: verify_accession_region
+- notes: CORRECTLY REJECTED by v5.1+ML v2 (sensitive_only; pssm 11.04, ml 0.272). Same-family negative control. NB: PDE4D is recruited by AKAPs but is not an AKAP.
+
+### PDE04 — PDE2A (302-325, negative-determinant control) (Homo sapiens)
+- accession: **O00408** (UniProt); PDB: —; region: 302-325 (core LKDLTSEDVQQL); GAF-A domain ~215-372; type: full_protein
+- location: cytosol / mitochondria-associated | function: cyclic-nucleotide phosphodiesterase regulatory (GAF-A) domain
+- binding partner: GAF-A dimerization locus / intramolecular packing | surface: regulatory-domain helix (NOT PKA D/D groove)
+- AKAP-like because: amphipathic window in a GAF regulatory domain
+- NOT AKAP because: phosphodiesterase GAF-A region; also carries a negative determinant on the face
+- context evidence: PDE2A GAF-A 215-372 (dimerization locus, PNAS 2002); structural: —
+- expected failure mode: rejected by negative-determinant red flag (n_negdet=1)
+- intended use: **same_protein_negative_determinant_control** | priority: **medium** | verification: verify_region
+- notes: CORRECTLY REJECTED by v5.1+ML v2 (unlikely; biological red flag, n_negdet=1). Same-protein control showing the negative-determinant path firing.
 

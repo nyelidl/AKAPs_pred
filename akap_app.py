@@ -32,10 +32,12 @@ _HAVE_ML = False
 _ML_BUNDLE = None
 _ML_MODEL_PATH = None
 _ML_METADATA = {}
+_ML_LOAD_ERROR = None
 try:
     # Use backend loader so CLI and app share the same model loading behavior.
     _ML_BUNDLE = A.load_ml_model()
     _HAVE_ML = _ML_BUNDLE is not None
+    _ML_LOAD_ERROR = getattr(A, "_ML_LOAD_ERROR", None)
     for _candidate in ("akap_ml_model_v2.joblib", "akap_ml_model.joblib"):
         _p = os.path.join(SCRIPT_DIR, _candidate)
         if os.path.exists(_p):
@@ -48,7 +50,7 @@ try:
 except Exception as _e:
     _HAVE_ML = False
     _ML_BUNDLE = None
-    _ML_METADATA = {}
+    _ML_LOAD_ERROR = f"{type(_e).__name__}: {_e}"
 
 # ─── Load PSSM ───
 PSSM = A.load_pssm()
@@ -389,6 +391,99 @@ def plot_protein_map(seq, hits_df, protein_name):
 # ═════════════════════════════════════════════════════════════════════════════
 # Streamlit App
 # ═════════════════════════════════════════════════════════════════════════════
+def render_model_diagnostics():
+    """Read-only Model Diagnostics view. Does NOT change predictions or the model."""
+    st.header("📊 Model Diagnostics")
+
+    # 1. Current deployed model
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Tool version", "AKAPSpred v5.1")
+    c2.metric("ML model", "v2 (deployed)")
+    c3.metric("ML v3", "not deployed")
+    if _HAVE_ML:
+        st.caption(f"✅ Current status: v5.1 uses ML v2 + confidence logic + biological "
+                   f"filters. ML model loaded: {os.path.basename(_ML_MODEL_PATH or 'akap_ml_model_v2.joblib')}")
+    else:
+        st.error("⚠️ ML model NOT loaded — running rule-only. See requirements.txt / logs.")
+        if _ML_LOAD_ERROR:
+            st.caption(f"Reason: {_ML_LOAD_ERROR}")
+
+    st.divider()
+
+    # 2. PDE sanity check
+    st.subheader("PDE sanity check (real screen)")
+    import pandas as _pd
+    pde = _pd.DataFrame([
+        {"Case": "PDE3A 64–87",  "Result": "sensitive_only, PSSM 7.64, ML 0.005, amphipathic=False", "Interpretation": "correctly rejected"},
+        {"Case": "PDE4D 267–290","Result": "sensitive_only, PSSM 11.04, ML 0.272",                    "Interpretation": "correctly held down"},
+        {"Case": "PDE2A 302–325","Result": "unlikely",                                                 "Interpretation": "negative-determinant red flag"},
+        {"Case": "PDE2A 404–427","Result": "high, PSSM 15.14, ML 0.992",                               "Interpretation": "contextual false positive"},
+    ])
+    st.dataframe(pde, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # 3. Known contextual false positive
+    st.subheader("Known contextual false positive")
+    st.warning(
+        "**PDE2A 404–427** is a real full-protein, high-PSSM, amphipathic non-AKAP "
+        "**danger-zone false positive**. The window lies in the PDE2A **GAF-B "
+        "regulatory / domain-packing context**, not in a known PKA RI/RII D/D anchoring "
+        "domain."
+    )
+    st.caption(
+        "This is **annotation / domain-context evidence**, not a direct experimental "
+        "non-binding assay. It is a *biologically supported contextual false positive*, "
+        "**not** an experimentally proven non-binder. The burden of proof is on the "
+        "AKAP-positive call."
+    )
+
+    st.divider()
+
+    # 4. Current limitation
+    st.subheader("Current limitation")
+    st.markdown(
+        "ML v2 may not independently reject all high-PSSM amphipathic non-AKAP helices. "
+        "In the **danger zone** —"
+    )
+    st.code("amphipathic = True\nPSSM ≥ 12\nnon-AKAP biological context", language="text")
+    st.markdown(
+        "— some **domain-packing, dimerization, regulatory, GAF-domain, coiled-coil, or "
+        "PPI-like** helices may be scored high. The PSSM floor is the main filter there; "
+        "ML v2 does not yet add independent discrimination in this region."
+    )
+
+    st.divider()
+
+    # 5. ML v3 direction
+    st.subheader("ML v3 direction (planned, not deployed)")
+    st.markdown(
+        "ML v3 will target this limitation using biological-context hard negatives, "
+        "including:\n"
+        "- PDE / GAF regulatory-domain helices\n"
+        "- domain-packing helices\n"
+        "- dimerization helices\n"
+        "- coiled-coil helices\n"
+        "- membrane-binding amphipathic helices\n"
+        "- lipid-binding amphipathic helices\n"
+        "- generic helix-in-groove PPI motifs\n"
+        "- DDIP-like helices"
+    )
+
+    st.divider()
+
+    # 6. User guidance
+    st.subheader("How to interpret results")
+    st.info(
+        "High-confidence hits are **candidate AKAP-like motifs, not proof of PKA "
+        "binding**. Hits in known non-AKAP regulatory / domain-packing regions should "
+        "be manually reviewed — especially high-PSSM amphipathic helices in the danger "
+        "zone."
+    )
+    st.caption("Details: BIOLOGICAL_HARD_NEGATIVE_BENCHMARK_PROTOCOL.md, "
+               "HARD_NEGATIVE_DIAGNOSTIC_REPORT.md, STREAMLIT_DIAGNOSTICS_NOTE.md.")
+
+
 def main():
     st.set_page_config(
         page_title="AKAP Domain Screener",
@@ -415,27 +510,35 @@ def main():
     ([DOI: 10.1042/BCJ20253085](https://doi.org/10.1042/BCJ20253085))
     """)
 
-    with st.expander("📖 Quick start: how to use this tool", expanded=False):
-        st.markdown("""
-**Step 1**: Enter your protein(s) — paste a sequence, upload a FASTA/CSV, or search UniProt by name.
-
-**Step 2**: Click **Run AKAP Screen**.
-
-**Step 3**: Look at the **proteomic_confidence** column in the results:
-
-| You see | It means | What to do |
-|---|---|---|
-| 🟢 **Very High** | Strong AKAP candidate | ✅ Prioritize for experimental follow-up |
-| 🟡 **High** | Likely AKAP | ✅ Good candidate for validation |
-| 🔵 **Medium** | Moderate evidence | ❓ Review the details before deciding |
-| ⚪ **Sensitive Only** | Weak match (PSSM only) | ⚠️ Probably NOT an AKAP — could be a transmembrane helix |
-| 🔴 **Unlikely** | Biological red flags | ❌ Not an AKAP |
-
-**Tip**: For large protein lists (>100 proteins), switch to **ML-prioritized proteomic confidence** mode in the sidebar — it filters out false positives automatically.
-        """)
+    # ── Persistent "must know" callout (shown in the Screener) ──
+    st.info(
+        "ℹ️ **Read before interpreting results — deployed model: AKAPSpred v5.1 + ML v2 "
+        "(ML v3 planned, not deployed).**\n"
+        "- **High-confidence = a candidate AKAP-like motif, not proof of PKA binding.** "
+        "Treat hits as hypotheses for experimental validation.\n"
+        "- **Manually review danger-zone hits:** `amphipathic = True` **and** `PSSM ≥ 12` "
+        "in a non-AKAP context. ML v2 may score real non-AKAP helices high here "
+        "(e.g. PDE2A 404–427 → high; a GAF regulatory/dimerization helix, not an anchor). "
+        "Domain-packing, dimerization, GAF/regulatory, coiled-coil, and PPI-like helices "
+        "are the typical culprits.\n"
+        "- **`ml_prob` is an ML confidence / ranking score, not a calibrated probability.** "
+        "The 0.80 / 0.90 / 0.95 gates order candidates; they are not posterior binding "
+        "probabilities.\n"
+        "- **RI predictions are from a small training set (~28 positives) — interpret RI "
+        "cautiously.**\n"
+        "- Synthetic-benchmark performance is **not** external biological validation. "
+        "See the **📊 Model diagnostics** view (sidebar) for details."
+    )
 
     # ── Sidebar: Parameters ──
     with st.sidebar:
+        nav_view = st.radio(
+            "View",
+            ["🔬 Screener", "📊 Model diagnostics"],
+            help="Screener runs predictions. Model diagnostics shows deployed-model "
+                 "status, the PDE sanity check, and known limitations (read-only).",
+        )
+        st.divider()
         st.header("⚙️ Parameters")
 
         st.subheader("🎯 Screening Mode")
@@ -446,22 +549,15 @@ def main():
                  "ML-prioritized = stricter, uses ML + length-aware background risk for large protein lists.",
         )
         if screening_mode == "Sensitive discovery":
-            st.info("💡 **Sensitive mode**: Shows ALL hits above the PSSM threshold. "
-                    "Many will be false positives (transmembrane helices, random hydrophobic stretches). "
-                    "Use the `proteomic_confidence` column to decide which hits to trust.")
+            st.info("💡 Shows all PSSM hits. Use `proteomic_confidence` column to triage.")
         else:
-            st.success("🔬 **Proteomic mode**: Shows only high/very_high confidence hits. "
-                       "These have strong PSSM scores, ML support, and pass biological checks. "
-                       "Best for screening large protein lists where you want reliable candidates.")
+            st.success("🔬 Only ML/rule-supported high/very_high confidence hits will be shown.")
 
         st.subheader("PSSM Thresholds")
         rii_thr = st.slider("PKA-RIIα threshold", 3.0, 15.0, 7.0, 0.5,
                             help="Default 7.0 recovers 99.2% of known motifs")
         ri_thr = st.slider("PKA-RIα threshold", 5.0, 25.0, 12.0, 0.5,
                            help="Default 12.0 recovers 100% of known motifs")
-        st.caption("💡 Lower thresholds = more hits but more false positives. "
-                   "The defaults (7.0 / 12.0) are calibrated for sensitive discovery. "
-                   "The proteomic confidence tiers apply stricter cutoffs automatically.")
 
         st.subheader("Options")
         strict = st.checkbox("Require literal regex match", value=False,
@@ -470,11 +566,17 @@ def main():
         use_ml = st.checkbox("Enable ML scoring", value=_HAVE_ML,
                              disabled=not _HAVE_ML,
                              help="Use the selected v2 ML model as the second-stage proteomic prioritization layer")
+        if _HAVE_ML:
+            st.caption(f"✅ ML model loaded: {os.path.basename(_ML_MODEL_PATH or 'akap_ml_model_v2.joblib')}")
+        else:
+            st.error("⚠️ ML model NOT loaded — running rule-only (you will see `ML unavailable`).")
+            if _ML_LOAD_ERROR:
+                st.caption(f"Reason: {_ML_LOAD_ERROR}")
+            st.caption("Usually a scikit-learn / xgboost / numpy version mismatch when unpickling, "
+                       "or the .joblib not present in the deployed repo. Pin versions in requirements.txt.")
         ml_thr = 0.0
         if use_ml and _HAVE_ML:
             ml_thr = st.slider("ML high-confidence threshold", 0.0, 1.0, 0.80, 0.05)
-            st.caption("💡 This sets the ML probability cutoff for 'high' confidence. "
-                       "Hits below this are downgraded. Default 0.80 balances sensitivity and specificity.")
 
         st.divider()
         st.subheader("📊 About the tool")
@@ -506,6 +608,11 @@ def main():
         **Negative determinants**: Asp/Glu at hydrophobic anchor positions
         abolish PKA binding (demonstrated in OPA1 fungal forms & smAKAP S66D).
         """)
+
+    # ── Diagnostics view: render and stop (screener untouched) ──
+    if nav_view == "📊 Model diagnostics":
+        render_model_diagnostics()
+        st.stop()
 
     # ── Input ──
     st.header("📥 Input")
@@ -694,37 +801,29 @@ def main():
                     tier_cols[i].metric(tier.replace("_", " ").title(), ct)
                 tier_cols[4].metric("Mode", screening_mode.split()[0])
 
-                # ── User guide: what do these tiers mean? ──
-                with st.expander("📖 What do these confidence tiers mean?", expanded=False):
-                    st.markdown("""
-| Tier | Meaning | Action |
-|---|---|---|
-| 🟢 **Very High** | Strong PSSM + ML support, low background noise | ✅ High-confidence AKAP candidate — prioritize for follow-up |
-| 🟡 **High** | Good combined evidence (PSSM ≥ 12, ML ≥ 0.80) | ✅ Likely AKAP — consider for experimental validation |
-| 🔵 **Medium** | Moderate ML support but below strict thresholds | ❓ Possible candidate — review manually before concluding |
-| ⚪ **Sensitive Only** | Passed PSSM but failed ML / high background risk | ⚠️ Probably NOT an AKAP — could be a transmembrane helix or random match |
-| 🔴 **Unlikely** | Charged residue (D/E) disrupts the hydrophobic face | ❌ Almost certainly NOT an AKAP |
-
-**Key points for users:**
-- **Very High + High** = results you can trust for proteomic-scale screening
-- **Sensitive Only** = most of these are false positives; useful only if you have independent experimental evidence for that specific protein
-- **ML unavailable** in filter reason = the ML model was not loaded; confidence is based on sequence rules only (less reliable)
-- **Background risk = high** = this protein is long, so random hydrophobic stretches can match the PSSM pattern by chance
-                    """)
-
-                # Quick summary sentence
-                n_high = conf_counts.get("very_high", 0) + conf_counts.get("high", 0)
-                n_sens = conf_counts.get("sensitive_only", 0) + conf_counts.get("medium", 0)
-                if n_high > 0:
-                    st.success(f"🎯 **{n_high} high-confidence AKAP candidate(s)** found. "
-                               f"{n_sens} additional sensitive-only hit(s).")
-                elif n_sens > 0:
-                    st.warning(f"⚠️ No high-confidence hits. {n_sens} sensitive-only hit(s) found — "
-                               f"these are likely false positives unless you have prior evidence.")
-
             if len(results) > 0:
                 # ── Results table ──
                 st.subheader("🎯 Hit Table")
+
+                with st.expander("ℹ️ How to read this table (confidence tiers + danger zone)"):
+                    st.markdown(
+                        "**Confidence tiers**\n"
+                        "- **very_high / high** — proteomic-grade candidate (still a *candidate*, "
+                        "not proof of PKA binding).\n"
+                        "- **medium / sensitive_only** — weaker candidate; appears mainly in "
+                        "Sensitive discovery mode for triage.\n"
+                        "- **unlikely** — rejected (e.g. negative-determinant red flag: charged "
+                        "D/E on the hydrophobic anchor face).\n\n"
+                        "**Danger zone — review these manually:** rows where `amphipathic = True` "
+                        "**and** `pssm_score ≥ 12`. The PSSM floor is the main filter there; ML v2 "
+                        "does **not** yet independently reject real non-AKAP helices in this region "
+                        "(domain-packing / dimerization / GAF-regulatory / coiled-coil / PPI-like). "
+                        "A high call on a known non-AKAP regulatory region is a contextual false "
+                        "positive (confirmed example: PDE2A 404–427).\n\n"
+                        "**`ml_prob`** is an ML ranking/confidence score, not a calibrated "
+                        "probability. **RI** results rest on a small training set — interpret with "
+                        "extra caution."
+                    )
 
                 # Format for display — proteomic confidence first
                 display_cols = ["protein", "proteomic_confidence", "isoform", "classification",
@@ -768,27 +867,6 @@ def main():
                     use_container_width=True,
                 )
 
-                # ── Column guide ──
-                with st.expander("📖 What do the columns mean?", expanded=False):
-                    st.markdown("""
-| Column | Meaning |
-|---|---|
-| **Confidence** | Overall verdict: very_high / high / medium / sensitive_only / unlikely |
-| **PSSM Score** | How well the sequence matches known AKAP motifs (higher = better; ≥12 = strong) |
-| **ML Prob** | Machine learning probability of being a real AKAP (0–1; ≥0.80 = good) |
-| **ML Pass** | ✅ = ML supports this as an AKAP; ❌ = ML does not support it |
-| **ML Tier** | ML-based confidence category |
-| **Len-adjusted** | PSSM score corrected for protein length (longer proteins get more random matches) |
-| **Background Risk** | How likely a random protein of this length would produce this PSSM score by chance |
-| **Class** | AKAP (likely PKA anchor) / DDIP (binds d/d groove but NOT PKA) / unlikely (disrupted) |
-| **NegDet** | Count of charged residues (D/E) at hydrophobic anchor positions — these block PKA binding |
-| **d/d Class** | Which PKA regulatory subunit type: RIID2 (PKA-RIIα) or RID2 (PKA-RIα) |
-| **Amphipathic** | ✅ = the helix has a proper hydrophobic + hydrophilic face pattern |
-| **Helix Turns** | Estimated amphipathic helix length (AKAPs need ≥5 turns; DDIPs have 3–4) |
-| **pI** | Isoelectric point of the motif core (most AKAPs are acidic, pI 3–6) |
-| **Filter Reason** | Detailed explanation of why this hit got its confidence tier |
-                    """)
-
                 # ── Per-protein detail view ──
                 st.subheader("🔬 Detailed View")
                 sel_protein = st.selectbox("Select protein:", sorted(hit_proteins))
@@ -819,16 +897,12 @@ def main():
                                     f"Helical Wheel — {hit['isoform']} core"),
                                 use_container_width=True,
                             )
-                            st.caption("💡 In a true AKAP, hydrophobic residues (orange) cluster on one side "
-                                       "and polar/charged residues (red/blue) on the other — this is the amphipathic pattern.")
                         with c2:
                             st.plotly_chart(
                                 plot_hydrophobicity_profile(win_seq,
                                     f"Hydrophobicity — full window"),
                                 use_container_width=True,
                             )
-                            st.caption("💡 The red dashed line shows the α-helix periodicity (3.6 residues/turn). "
-                                       "A real AKAP helix shows hydrophobic peaks aligning with this period.")
 
                         # Score gauge
                         max_s = 25 if hit["isoform"] == "RII" else 40
@@ -846,20 +920,6 @@ def main():
                         detail_cols[4].metric("Canonical", "✅" if hit["canonical"] else "❌")
                         detail_cols[5].metric("d/d class", hit.get("dd_class", "—"))
 
-                        # Interpretation hint
-                        conf = hit.get("proteomic_confidence", "")
-                        if conf == "very_high":
-                            st.success("🟢 **Very high confidence** — this is a strong AKAP candidate with robust PSSM + ML support.")
-                        elif conf == "high":
-                            st.success("🟡 **High confidence** — good evidence for AKAP function. Consider experimental follow-up.")
-                        elif conf == "medium":
-                            st.info("🔵 **Medium confidence** — moderate support. Review the helical wheel and hydrophobicity profile before concluding.")
-                        elif conf == "sensitive_only":
-                            st.warning("⚪ **Sensitive only** — this hit passed the PSSM threshold but lacks ML support or has high background risk. "
-                                       "Most sensitive-only hits in random proteins are false positives (e.g., transmembrane helices).")
-                        elif conf == "unlikely":
-                            st.error("🔴 **Unlikely** — a charged residue (Asp/Glu) sits on the hydrophobic face, which blocks PKA binding.")
-
                 # ── Score distribution ──
                 if len(results) > 3:
                     st.subheader("📈 Score Distributions")
@@ -875,9 +935,6 @@ def main():
             # ── Proteins without hits ──
             if no_hit:
                 st.subheader("❌ Proteins without AKAP motifs")
-                st.caption("These proteins have no sequence windows scoring above the PSSM threshold. "
-                           "This means no amphipathic helix matching the AKAP pattern was found. "
-                           "Note: some AKAPs bind PKA via non-canonical mechanisms that this tool cannot detect.")
                 for p in sorted(no_hit):
                     st.write(f"  • {p}")
 
